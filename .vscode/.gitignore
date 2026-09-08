@@ -1,0 +1,4 @@
+# Ignore all other files
+.python.env
+# *.json
+settings.json
