@@ -1,0 +1,4 @@
+
+[P1.1] non-terminal transitions checked : 32
+[P1.1] terminal transitions checked     : 16
+[P1.1] PASSED: snapshots hold the pre-reset state and are always populated.

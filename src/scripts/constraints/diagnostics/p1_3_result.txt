@@ -1,0 +1,3 @@
+[P1.3] constraint_state_space: Box(-inf, inf, (1,), float32)
+[P1.3] steps compared: 12
+[P1.3] PASSED: the wrapper relays every channel bit-exact and exposes the space.

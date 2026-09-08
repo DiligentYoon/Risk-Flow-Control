@@ -1,0 +1,4 @@
+[P1.2] MRO: SmokeEnv -> G1BaseEnv -> ConstraintsEnv -> Env -> Env
+[P1.2] reset: obs=(4, 29) states=(4, 29) constraint_states=(4, 2)
+[P1.2] steps run: 40, terminal transitions seen: 16
+[P1.2] PASSED: single-chain MRO, scene builds, snapshots hold on the G1 path.

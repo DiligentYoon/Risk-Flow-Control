@@ -1,0 +1,6 @@
+[P1.4] MRO: G1RiskEnv -> G1BaseEnv -> ConstraintsEnv -> Env
+[P1.4] reset: obs=(4, 96) states=None constraint_states=(4, 67)
+[P1.4] max_episode_length=100 (episode_length_s=2.0, step_dt=0.0200)
+[P1.4] truncation periods observed: [99] (expected [99])
+[P1.4] terminations (phase A): 4, constraint-hook calls: 661
+[P1.4] PASSED: single chain, H-length episodes, single-agent path, no gait leftovers.
