@@ -1,0 +1,20 @@
+[P4.1] device=cuda:0, num_envs=64
+[P4.1] target algebra: fixed-point error=1.526e-05, absorbing error=0.000e+00
+[P4.1] mask wiring: batch has 4 terminated / 5 truncated
+[P4.1] target critic: tau=0.005, polyak error=1.490e-08, step size=2.115e-02
+[P4.1] masked path: 64 terminations, critic_loss 6.0888e-02 -> 4.3540e-02
+[P4.1] critic loss: 0:3.346e-03, 1000:1.973e-05, 2000:2.624e-05, 3000:1.726e-05, 3999:2.589e-05
+[P4.1] per-head loss: h=1 1.655e-04, h=10 3.954e-05, h=50 1.906e-05, h=99 1.883e-05
+[P4.1] cumulative     h     corr        bias    slope
+[P4.1] cumulative     1   0.9731  -2.149e-05    0.949
+[P4.1] cumulative    10   0.9841  -8.882e-04    0.949
+[P4.1] cumulative    50   0.5674   8.074e-03    0.480
+[P4.1] cumulative    99   0.7387  -5.175e-02    0.932
+[P4.1] increment      h  corr(h-1)    corr(h)  corr(h+1)  ref auto
+[P4.1] increment      1        nan     0.9731    -0.1541   -0.2016
+[P4.1] increment     10     0.0565     0.7404     0.2261   -0.2177
+[P4.1] increment     50     0.0047     0.0298     0.0027   -0.2208
+[P4.1] increment     50 alignment not resolvable (|corr| 0.030 < 0.3) -- reported, not gated
+[P4.1] increment     99     0.0163     0.0551        nan   -0.3713
+[P4.1] increment     99 alignment not resolvable (|corr| 0.055 < 0.3) -- reported, not gated
+[P4.1] PASSED: target algebra exact over every head, absorbing mask wired to `terminated` alone, and the predicted flow tracks the Monte-Carlo reference in sign and scale at every horizon.

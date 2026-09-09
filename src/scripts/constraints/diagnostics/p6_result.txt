@@ -1,0 +1,6 @@
+[P6] device=cuda:0, num_envs=16, episodes=32, checkpoint=agent_1000.pt
+[P6] restoration: action 0.000e+00, critic 0.000e+00, RunningMeanStd 0.000e+00 (standardizer |mean| actor 2.999 / critic 2.100, unloaded agent differs by 1.555e-02)
+[P6] metric reduction: 11/11 closed-form values match (recovery 0.500, falls 0.250, cost 2.500)
+[P6] reset latch: 3/3 batches actually reset
+[P6] end to end: report 1 KiB, plot 197 KiB, video 277 KiB in C:\Users\grape\OneDrive\Risk_Flow_Control\runs\g1_risk\2026-09-08_23-40-54\play_agent_1000_riskflow
+[P6] PASSED: the checkpoint plays back exactly, the metrics reduce correctly, and the pipeline runs to its artifacts.

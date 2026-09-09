@@ -36,19 +36,6 @@ class ConstraintsEnv(Env):
        the true next state in the one window where it still exists (after ``_get_dones`` and
        ``_get_rewards``, before ``_reset_idx``) and publishes it through
        ``extras["final_observations"]`` / ``extras["final_constraint_states"]``.
-
-    The snapshots are *always* populated, terminal step or not, so consumers never branch on the
-    termination flags to decide which tensor to read.
-
-    Note:
-        :meth:`step` re-implements :meth:`Env.step` rather than delegating to it. The capture point
-        sits in the middle of that method, and a subclass hook is not usable here: the concrete task
-        environment overrides ``_get_dones``/``_get_rewards``/``_reset_idx`` itself, which would
-        shadow any hook installed on those names further down the inheritance chain.
-
-    Note:
-        Flat tensor observations are assumed (single-agent). The dictionary observation layout used
-        by the multi-agent environments is not supported.
     """
 
     cfg: ConstraintsEnvCfg
@@ -62,10 +49,6 @@ class ConstraintsEnv(Env):
         self.constraint_state_buf: torch.Tensor | None = None
         self.final_obs_buf: torch.Tensor | None = None
         self.final_constraint_state_buf: torch.Tensor | None = None
-
-        # The constraint-state dimension is validated on the first tensor produced, not on every
-        # step. A mismatch is a wiring bug, and it never appears halfway through a run.
-        self._constraint_states_validated = False
 
     """
     Properties
@@ -161,9 +144,8 @@ class ConstraintsEnv(Env):
         self.reset_buf = self.reset_terminated | self.reset_time_outs
         self.reward_buf = self._get_rewards()
 
-        # -- capture the state that actually followed the action, before the same-step autoreset
-        #    below overwrites it for the terminated environments
-        self._capture_final_states()
+        # capture the state that actually followed the action, before the same-step reset overwrites it for the terminated environments
+        final_obs_buf, final_constraint_state_buf = self._capture_final_states()
 
         # -- reset envs that terminated/timed-out and log the episode information
         reset_env_ids = self.reset_buf.nonzero(as_tuple=False).squeeze(-1)
@@ -183,11 +165,15 @@ class ConstraintsEnv(Env):
                 self.event_manager.apply(mode="interval", dt=self.step_dt)
 
         # update observations
-        # note: no noise is applied to the state space (it is used for critic networks) nor to the
-        #       constraint states (they are the input of frozen networks trained without it)
+        # note: no noise is applied to the state space nor to the constraint states
         self.obs_buf = self._apply_observation_noise(self._get_observations())
         self.state_buf = self._get_states()
         self.constraint_state_buf = self._get_constraint_states()
+
+        # update final components
+        self.final_obs_buf = self.obs_buf.clone()
+        self.final_obs_buf[reset_env_ids] = final_obs_buf[reset_env_ids]
+        self.final_constraint_state_buf = final_constraint_state_buf
 
         # update viz data
         if self.cfg.viz_data is not None:
@@ -237,15 +223,17 @@ class ConstraintsEnv(Env):
         self.single_observation_space["constraints"] = spec_to_gym_space(self.cfg.constraint_state_space)
         self.constraint_state_space = gym.vector.utils.batch_space(self.single_observation_space["constraints"], self.num_envs)
 
-    def _capture_final_states(self):
+    def _capture_final_states(self) -> tuple[torch.Tensor, torch.Tensor]:
         """Snapshot the true next state before the same-step autoreset discards it.
 
         Called once per step, after the termination flags and rewards have been computed and before
         any environment is reset. At this point the simulator and the cached intermediate values
         still describe the state reached by the last action, for every environment.
         """
-        self.final_obs_buf = self._apply_observation_noise(self._get_observations())
-        self.final_constraint_state_buf = self._get_constraint_states()
+        final_obs_buf = self._apply_observation_noise(self._get_observations())
+        final_constraint_state_buf = self._get_constraint_states()
+
+        return final_obs_buf, final_constraint_state_buf
 
     def _apply_action_noise(self, action: torch.Tensor) -> torch.Tensor:
         """Apply the configured noise model to the actions."""

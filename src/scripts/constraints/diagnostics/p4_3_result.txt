@@ -1,0 +1,13 @@
+[P4.3] device=cuda:0, num_envs=64
+[P4.3] initial: nu=0.0000 -> lambda=0.6931 (1/H = 0.0101)
+[P4.3] direction: g>0 lambda 0.69315 -> 0.71855, g<0 lambda 0.71855 -> 0.70220
+[P4.3] softplus: nu=-1000 -> lambda=0 (d/dnu 0), nu=-50 -> lambda=1.929e-22 (d/dnu 1.9e-22), nu=-1 -> lambda=0.3133 (d/dnu 0.27), nu=0 -> lambda=0.6931 (d/dnu 0.5), nu=5 -> lambda=5.007 (d/dnu 0.99)
+[P4.3] serialization: lambda 1.489514 -> saved -> clobbered -> 1.489514
+[P4.3] effective weight (lambda=1.3133): interior head 0.010101 (expect 0.010101), D_H 1.323363 (expect 1.323363)
+[P4.3]   step    0: critic 4.809e-02  actor +2.570e-02  lambda 0.6936  g +3.804e-02  violating 1.00  |a|rms 0.000
+[P4.3]   step  100: critic 5.906e-02  actor -1.612e-01  lambda 0.6591  g -4.617e-01  violating 0.25  |a|rms 1.324
+[P4.3]   step  200: critic 7.005e-02  actor -1.311e+00  lambda 0.5777  g -1.695e+00  violating 0.01  |a|rms 2.104
+[P4.3]   step  300: critic 5.309e-02  actor -1.571e+00  lambda 0.5088  g -2.122e+00  violating 0.01  |a|rms 2.839
+[P4.3]   step  399: critic 4.794e-02  actor -1.614e+00  lambda 0.4587  g -2.179e+00  violating 0.00  |a|rms 3.087
+[P4.3] lambda vs interval-mean g: g -1.819e-01 -> dlambda -0.0346, g -1.080e+00 -> dlambda -0.0814, g -2.014e+00 -> dlambda -0.0689, g -2.197e+00 -> dlambda -0.0501
+[P4.3] PASSED: the dual step has the right sign, lambda stays non-negative and serializable, and D_H carries exactly 1/H + lambda.

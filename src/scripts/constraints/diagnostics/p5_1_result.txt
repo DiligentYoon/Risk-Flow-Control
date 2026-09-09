@@ -1,0 +1,9 @@
+[P5.1] device=cuda:0, num_envs=64, timesteps=1000
+[P5.1] config surface: 15/15 agent keys, buffer_size=512, timesteps=200000
+[P5.1] horizon: auto -> 99 (env.max_episode_length 100 - 1)
+[P5.1] checkpoint: action 0.000e+00, critic 0.000e+00, target critic 0.000e+00, lambda 0.000e+00, Adam step 20 -> 20 exp_avg 0.000e+00
+[P5.1] resumed update: action divergence after one shared update = 0.000e+00
+[P5.1] smoke run: completed 1000 steps into 2026-09-08_23-40-54
+[P5.1] logging: 8/8 required tags in events.out.tfevents.1788878457.DESKTOP-19PFIPC.37836.0 (2018 KiB)
+[P5.1] memory trend: 0.062 -> 0.063 GiB over 100 samples (+0.6%)
+[P5.1] PASSED: the config exposes every hyperparameter, the run is resumable bit-for-bit, and the loop logs everything section 5 asks for.

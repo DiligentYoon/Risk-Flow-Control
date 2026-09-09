@@ -1,0 +1,8 @@
+[P3.1] device=cuda:0
+[P3.1] pi(o) -> (64, 29), D(s, a) -> (64, 99)
+[P3.1] initial |a|_max=0.0134, |D|_max=0.0174
+[P3.1] |grad_a D|_mean=4.226e-05
+[P3.1] frozen critic: params with grad=0, actor params with grad=8/8
+[P3.1] round-trip bit-exact: actor=True, critic=True
+[P3.1] frozen V_N: shape=(64, 1), drifted stats=[], training=False
+[P3.1] PASSED: shapes, gradient path, freeze toggle, and a drift-free frozen V_N.

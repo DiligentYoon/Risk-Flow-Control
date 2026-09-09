@@ -1,0 +1,17 @@
+[P4.2] device=cuda:0, num_envs=64
+[P4.2] torque surrogate: closed-form error=0.000e+00, q slice=9:38, q_dot slice=38:67, Kp[0]=200.0, Kd[0]=5.00
+[P4.2] control cost: mean=1.4926e+04, |grad_a C_reg|_mean=3.8888e+02
+[P4.2] actor update: loss=1.3329e+01, flow=4.1965e-05, C_reg=1.3329e+04, |a|_max=0.0155
+[P4.2] gradient isolation: critic params with grad=0, target critic=0, actor params with finite grad=8/8
+[P4.2] actor descent (critic held): 1.3673e+01 -> 1.3579e+01
+[P4.2] interleaved 400 steps, 321 terminations, 1 gradient step per environment step
+[P4.2]   step    0: critic 3.212e-02  actor +2.126e-04  D +1.068e-04  C_reg 1.057e-01  |a|rms 0.005  |a|max 0.010
+[P4.2]   step  100: critic 7.704e-02  actor +6.205e-02  D -1.383e-01  C_reg 2.004e+02  |a|rms 0.946  |a|max 8.850
+[P4.2]   step  200: critic 5.617e-02  actor -5.639e-01  D -1.157e+00  C_reg 5.927e+02  |a|rms 2.366  |a|max 9.890
+[P4.2]   step  300: critic 5.284e-02  actor -4.292e-01  D -9.255e-01  C_reg 4.963e+02  |a|rms 2.612  |a|max 10.214
+[P4.2]   step  399: critic 4.289e-02  actor -5.370e-01  D -9.812e-01  C_reg 4.443e+02  |a|rms 2.673  |a|max 10.417
+[P4.2] surrogate vs simulator torque: corr=0.8158, rms surrogate=20.96, rms applied=18.42 (reported, not gated)
+[P4.2] |a|max trajectory: 0.01 -> 8.85 -> 9.89 -> 10.21 -> 10.42
+[P4.2] action growth per interval: first +8.841, last +0.203
+[P4.2] actor objective balance at the end: D -9.812e-01 vs beta*C_reg +4.443e-01 (beta=1e-03) -- the equilibrium magnitude is beta's to set, and is judged in P5.2
+[P4.2] PASSED: the policy gradient reaches the actor, the critic stays isolated, and the torque surrogate is exact and differentiable.

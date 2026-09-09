@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import copy
+
 import torch
 
 import isaaclab.sim as sim_utils
@@ -191,6 +193,30 @@ class G1RiskEnv(G1BaseEnv):
         return states
 
 
+    def get_torque_model(self) -> dict:
+        """Constants of the analytic PD torque surrogate.
+
+        The action is a joint-position offset and the low-level controller is PD, so the applied
+        torque is an analytic function of the action::
+
+            tau(s, a) = Kp * (action_scale * a - (q - q_default)) - Kd * q_dot
+
+        Both ``q - q_default`` and ``q_dot`` are already channels of the constraint state, so the
+        actor's control-cost term needs nothing beyond the gains and the offsets published here.
+        This environment owns that layout, so it publishes it rather than letting the agent
+        hard-code indices into a tensor it does not define.
+
+        The gains are read from environment 0. Domain randomization can spread them across
+        environments, and a replayed batch mixes environments, so per-sample gains are not
+        recoverable -- the nominal ones are the right constant for a regularizer.
+        """
+        return {
+            "action_scale": self.cfg.action_scale_factor,
+            "stiffness": self._robot.data.joint_stiffness[0, self._joint_dof_ids].clone(),
+            "damping": self._robot.data.joint_damping[0, self._joint_dof_ids].clone(),
+            "joint_pos_id": self.cfg.constraint_joint_pos_start,
+        }
+
     def _get_constraint_states(self) -> torch.Tensor:
         """Input of the frozen safety value function V_N."""
         return torch.cat(
@@ -264,6 +290,27 @@ class G1RiskEnv(G1BaseEnv):
                 self.prev_actions[env_ids] = 0.0
 
         self._compute_intermediate_values(env_ids)
+
+
+    def _update_viz_data(self):
+        """Fill the simulator-side channels of ``viz_data``.
+
+        The algorithm-side channels (``risk_value``, ``risk_flow``, ``terminal_risk``) are left at
+        their declared defaults: they are functions of the frozen ``V_N`` and of the critic, which
+        the environment does not hold, so ``play.py`` writes them in before appending a frame.
+
+        The tensors are cloned. Everything here is a persistent per-env buffer that the next step
+        rewrites in place, and the plotter appends the frame *after* that step has run.
+        """
+        max_torque = torch.max(torch.abs(self._robot.data.applied_torque), dim=-1).values      # [E,]
+        action_magnitude = torch.mean(torch.abs(self.prev_actions), dim=-1)                    # [E,]
+
+        extras = copy.deepcopy(self.extras)
+        extras["viz_data"]["action_magnitude"] = action_magnitude.clone()
+        extras["viz_data"]["max_torque"] = max_torque.clone()
+        extras["viz_data"]["CoM_height"] = self.CoM[:, 2].clone()
+
+        return extras
 
 
     def _compute_intermediate_values(self, env_ids: torch.Tensor | None = None):

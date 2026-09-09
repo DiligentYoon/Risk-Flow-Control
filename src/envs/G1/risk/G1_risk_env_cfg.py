@@ -11,6 +11,7 @@ from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils import configclass
 
 from lib.env.G1.safe.mdp.randomizer import reset_state_from_dataset
+from lib.utils.plot_utils import PNGSavePlotter
 
 from envs.G1.base.G1_base_env_cfg import G1BaseEnvCfg
 
@@ -18,14 +19,10 @@ from envs.G1.base.G1_base_env_cfg import G1BaseEnvCfg
 @configclass
 class G1RiskEnvCfg(G1BaseEnvCfg):
     ## ==================== Environment parameters ==================== ##
-    # The episode length IS the recovery deadline H: the terminal constraint
-    # V_N(s) + D_H <= delta_N is evaluated exactly when the episode ends.
-    # step_dt = sim.dt (0.005) * decimation (4) = 0.02 s, so 2.0 s = 100 steps.
     episode_length_s = 2.0
     decimation = 4
 
-    # CoM height below which a contact counts as a fall. Matches the value used
-    # when the frozen safety value function was trained.
+    # CoM height below which a contact counts as a fall. 
     termination_height = 0.2
 
     ## ========== Agent Setting =========== ##
@@ -34,13 +31,10 @@ class G1RiskEnvCfg(G1BaseEnvCfg):
     num_agents = 1
     action_scale_factor = 0.5
 
-    # No separate critic channel: the privileged input of the critic is the constraint state
-    # below, so declaring a state space would only carry the same tensor twice.
-    state_space = 0
-
     ## ========= Pre-trained Network Setting ========= ##
     # Input of the frozen safety value function V_N.
     # 3 (lin vel) + 3 (ang vel) + 3 (gravity) + 29 (q - q_default) + 29 (q_dot)
+    constraint_joint_pos_start = 9
     constraint_state_space = 67
 
     ## ============== Collision =============== ##
@@ -51,15 +45,16 @@ class G1RiskEnvCfg(G1BaseEnvCfg):
 
     # Risk-bucket reset
     # Sampling weights over {low, mid, high} buckets produced by collect_init_data.py.
-    # The safe bucket is excluded outright -- there is nothing to intervene on there -- while
-    # the two unsafe buckets are both used, since weighting them differently is meaningless.
     bucket_weights: dict[str, float] = {"low": 0.0, "mid": 1.0, "high": 1.0}
 
     def __post_init__(self):
         super().__post_init__()
 
-        # Intervention episodes start from a sampled risk state; external pushes would make the
-        # initial distribution something other than the dataset.
+        # visualization -- training records nothing per step
+        self.viz_data = None
+        self.plotter = None
+
+        # Intervention episodes start from a sampled risk state;
         self.events.push_robot = None
 
         self.events.reset_state_from_dataset = EventTerm(
@@ -88,3 +83,19 @@ class G1RiskPlayEnvCfg(G1RiskEnvCfg):
         )
 
         self.scene.num_envs = 1
+
+        # plotter
+        self.plotter = PNGSavePlotter
+
+        # The three `risk_*` channels are the algorithm's own quantities, not the simulator's:
+        # `play.py` writes them into `viz_data` before appending a frame, the way
+        # `main/reach_avoid/play.py` injects `risk_value`. They are declared here so that the
+        # plotter allocates a column for them from the first frame.
+        self.viz_data = {
+            "risk_value": 0.0,          # V_N(s_t)
+            "risk_flow": 0.0,           # D_H(s_t, a_t)
+            "terminal_risk": 0.0,       # V_N(s_t) + D_H(s_t, a_t) - delta_N
+            "action_magnitude": 0.0,
+            "max_torque": 0.0,
+            "CoM_height": 0.0,
+        }

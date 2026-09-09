@@ -1,0 +1,8 @@
+[P3.2] device=cuda:0
+[P3.2] tensors: ['observations', 'final_observations', 'constraint_states', 'final_constraint_states', 'actions', 'terminated', 'truncated']
+[P3.2] round-trip mismatched tensors: []
+[P3.2] flat index i <-> (i // num_envs, i % num_envs): consistent
+[P3.2] after 42 inserts into 32 rows: 32 newest kept, 10 oldest dropped, 0 misplaced
+[P3.2] sample_batch shapes: [(128, 96), (128, 67), (128, 1)]
+[P3.2] production buffer (512 x 2048 x 355 float32 + 2 bool): 1.389 GiB, allocated 1.389 GiB of 8.0 GiB (17.4%)
+[P3.2] PASSED: NaN-free init, bit-exact round-trip, correct wrap-around and indexing.
