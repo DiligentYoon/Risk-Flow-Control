@@ -36,10 +36,10 @@ class G1RiskEnv(G1BaseEnv):
         self.allowed_collision_link_ids, _ = self.contact_sensors.find_bodies(self.cfg.allowed_collision_bodies)
         self.denied_collision_link_ids = [b for b in total_body_ids if b not in self.allowed_collision_link_ids]
         self.arm_collision_link_ids, _ = self.contact_sensors.find_bodies([r"waist_.*_link",
-                                                                          r"torso_link",
-                                                                          r".*_shoulder_.*_link",
-                                                                          r".*_elbow_link",
-                                                                          r".*_wrist_(roll|pitch)_link"])
+                                                                           r"torso_link",
+                                                                           r".*_shoulder_.*_link",
+                                                                           r".*_elbow_link",
+                                                                           r".*_wrist_(roll|pitch)_link"])
 
         # Foot link
         self.foot_link_ids, _ = self._robot.find_bodies([r".*_ankle_.*_link"])

@@ -45,7 +45,7 @@ class G1RiskEnvCfg(G1BaseEnvCfg):
 
     # Risk-bucket reset
     # Sampling weights over {low, mid, high} buckets produced by collect_init_data.py.
-    bucket_weights: dict[str, float] = {"low": 0.0, "mid": 1.0, "high": 1.0}
+    bucket_weights: dict[str, float] = {"low": 0.0, "mid": 1.0, "high": 0.0}
 
     def __post_init__(self):
         super().__post_init__()
@@ -61,7 +61,7 @@ class G1RiskEnvCfg(G1BaseEnvCfg):
             func=reset_state_from_dataset,
             mode="reset",
             params={
-                "dataset_dir": "logs/dataset/risk_buffer",
+                "dataset_dir": "logs/frozen/collected",
                 "bucket_weights": self.bucket_weights,
                 "asset_cfg": SceneEntityCfg("robot"),
             },

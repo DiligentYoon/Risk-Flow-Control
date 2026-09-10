@@ -26,7 +26,7 @@ parser.add_argument("--video", action="store_true", default=False, help="Record 
 parser.add_argument("--video_length", type=int, default=200, help="Length of the recorded video (in steps).")
 parser.add_argument("--video_interval", type=int, default=2000, help="Interval between video recordings (in steps).")
 parser.add_argument("--disable_fabric", type=bool, default=False, help="Disable fabric and use USD I/O operations.")
-parser.add_argument("--num_envs", type=int, default=2048, help="Number of environments to simulate.")
+parser.add_argument("--num_envs", type=int, default=4096, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default="G1-risk", help="Name of the task.")
 parser.add_argument("--timesteps", type=int, default=None, help="Override the number of training steps.")
 parser.add_argument("--checkpoint", type=str, default=None, help="Path to a RiskFlow checkpoint to resume from.")
@@ -109,10 +109,10 @@ def summarize(info) -> list:
         return f"{label:<14}: {info[key]:{fmt}}"
 
     return [
-        field("critic loss", "critic_loss", ".5e"),
-        field("actor loss", "actor_loss", "+.5e"),
+        field("critic loss", "critic_loss", ".5f"),
+        field("actor loss", "actor_loss", ".5f"),
         field("lambda", "lambda", ".5f"),
-        field("violation g", "constraint_violation", "+.5e"),
+        field("violation g", "constraint_violation", ".5f"),
     ]
 
 
@@ -140,6 +140,7 @@ def main():
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
 
     if args_cli.video:
+        args_cli.video_interval = int(cfg["train"]["timesteps"] / 5)
         video_kwargs = {
             "video_folder": os.path.join(log_dir, "videos", "train"),
             "step_trigger": lambda step: step % args_cli.video_interval == 0,
@@ -191,6 +192,7 @@ def main():
     agent.set_running_mode("train")
     obs, _, constraint_states, infos = env.reset()
 
+    print_interval = horizon
     timestep = 0
     start_time = time.time()
     info = None
@@ -264,7 +266,7 @@ def main():
             write_tracking(writer, tracking_data, timestep)
 
         # CLI progress, on the same cadence as the checkpoints
-        if timestep % checkpoint_interval == 0 or timestep == timesteps:
+        if timestep % print_interval == 0 or timestep == timesteps:
             print_progress(timestep, timesteps, start_time, summarize(info))
 
         # Checkpoint save

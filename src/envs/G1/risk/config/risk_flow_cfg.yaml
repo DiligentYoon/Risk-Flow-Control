@@ -1,7 +1,7 @@
 seed: 42
 
 train:
-  timesteps: 200000
+  timesteps: 128000
 
 buffer:
   buffer_size: 512
