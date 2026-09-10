@@ -59,43 +59,8 @@ import envs
 from lib.utils.parse_utils import load_cfg_from_registry, parse_env_cfg
 
 from buffer.risk_flow_buffer import RiskFlowBuffer
-from scripts.constraints.common import build_agent, build_models, build_predictor, resolve_horizon
+from scripts.utils import build_agent, build_models, build_predictor, resolve_horizon, write_tracking, print_progress
 from wrappers.constraints_wrapper import ConstraintsRecordVideo, ConstraintsWrapper
-
-def write_tracking(writer, tracking_data, timestep) -> None:
-    """Write the interval's scalars, following the submodule's ``(min)`` / ``(max)`` suffix rule."""
-    for key, values in tracking_data.items():
-        if key.endswith("(min)"):
-            writer.add_scalar(key, np.min(values), timestep)
-        elif key.endswith("(max)"):
-            writer.add_scalar(key, np.max(values), timestep)
-        else:
-            writer.add_scalar(key, np.mean(values), timestep)
-    tracking_data.clear()
-
-
-def print_progress(timestep, timesteps, start_time, lines) -> None:
-    """CLI progress block, in the layout the submodule's training scripts use."""
-    elapsed = time.time() - start_time
-    remaining = (elapsed / timestep) * (timesteps - timestep) if timestep > 0 else 0.0
-
-    def hms(seconds):
-        return int(seconds // 3600), int((seconds % 3600) // 60), int(seconds % 60)
-
-    e_h, e_m, e_s = hms(elapsed)
-    c_h, c_m, c_s = hms(remaining)
-
-    width = 64
-    print(" ________________________________________________________________")
-    print("|                                                                |")
-    print(f"|{f'Step Progress {timestep} / {timesteps}'.center(width)}|")
-    print(f"|{f'Time Progress  {e_h:02d}:{e_m:02d}:{e_s:02d}/{c_h:02d}:{c_m:02d}:{c_s:02d}'.center(width)}|")
-    print("|________________________________________________________________|")
-    print("|                                                                |")
-    for line in lines:
-        print(f"| {line:<{width - 1}}|")
-    print("|________________________________________________________________|")
-
 
 def summarize(info) -> list:
     """The four numbers worth watching from the terminal, in the order they can go wrong.
@@ -182,20 +147,18 @@ def main():
     writer = SummaryWriter(log_dir=log_dir)
     tracking_data = collections.defaultdict(list)
 
-    # The per-head losses are summed on the device and averaged at the write interval, so the inner
-    # loop never pays a host synchronization for H values it would only average anyway.
+    # The per-head losses are summed on the device and averaged at the write interval.
     per_head_sum = torch.zeros(horizon, device=env.device)
     per_head_count = 0
 
+    info = None
+    timestep = 0
+    start_time = time.time()
+    print_interval = horizon
     gradient_steps = cfg["agent"].get("gradient_steps", 1)
 
     agent.set_running_mode("train")
     obs, _, constraint_states, infos = env.reset()
-
-    print_interval = horizon
-    timestep = 0
-    start_time = time.time()
-    info = None
 
     while simulation_app.is_running() and timestep < timesteps:
 

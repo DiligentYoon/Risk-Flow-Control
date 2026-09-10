@@ -88,7 +88,7 @@ import torch  # noqa: E402
 
 from lib.utils.parse_utils import load_cfg_from_registry  # noqa: E402
 
-from scripts.constraints.common import build_agent, build_models  # noqa: E402
+from scripts.utils import build_agent, build_models  # noqa: E402
 
 CONSTRAINT_DIM = 67
 OBS_DIM = 96

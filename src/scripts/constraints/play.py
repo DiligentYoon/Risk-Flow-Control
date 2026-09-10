@@ -54,7 +54,7 @@ import envs
 from lib.utils.parse_utils import parse_env_cfg, load_cfg_from_registry
 from lib.utils.plot_utils import GIFSavePlotter
 
-from scripts.constraints.common import build_agent, build_models, build_predictor, resolve_horizon
+from scripts.utils import build_agent, build_models, build_predictor, resolve_horizon
 from wrappers.constraints_wrapper import ConstraintsRecordVideo, ConstraintsWrapper
 
 def main():

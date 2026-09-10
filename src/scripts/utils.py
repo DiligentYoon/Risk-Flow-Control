@@ -19,8 +19,10 @@ Nothing here touches the simulator, so it imports cleanly before ``AppLauncher``
 from __future__ import annotations
 
 import os
+import time
 from typing import Any, Dict, Optional, Union
 
+import numpy as np
 import torch
 import torch.nn as nn
 
@@ -131,3 +133,38 @@ def build_agent(
         print(f"[INFO] RiskFlow restored from {path}")
 
     return agent
+
+
+def write_tracking(writer, tracking_data, timestep) -> None:
+    """Write the interval's scalars, following the submodule's ``(min)`` / ``(max)`` suffix rule."""
+    for key, values in tracking_data.items():
+        if key.endswith("(min)"):
+            writer.add_scalar(key, np.min(values), timestep)
+        elif key.endswith("(max)"):
+            writer.add_scalar(key, np.max(values), timestep)
+        else:
+            writer.add_scalar(key, np.mean(values), timestep)
+    tracking_data.clear()
+
+
+def print_progress(timestep, timesteps, start_time, lines) -> None:
+    """CLI progress block, in the layout the submodule's training scripts use."""
+    elapsed = time.time() - start_time
+    remaining = (elapsed / timestep) * (timesteps - timestep) if timestep > 0 else 0.0
+
+    def hms(seconds):
+        return int(seconds // 3600), int((seconds % 3600) // 60), int(seconds % 60)
+
+    e_h, e_m, e_s = hms(elapsed)
+    c_h, c_m, c_s = hms(remaining)
+
+    width = 64
+    print(" ________________________________________________________________")
+    print("|                                                                |")
+    print(f"|{f'Step Progress {timestep} / {timesteps}'.center(width)}|")
+    print(f"|{f'Time Progress  {e_h:02d}:{e_m:02d}:{e_s:02d}/{c_h:02d}:{c_m:02d}:{c_s:02d}'.center(width)}|")
+    print("|________________________________________________________________|")
+    print("|                                                                |")
+    for line in lines:
+        print(f"| {line:<{width - 1}}|")
+    print("|________________________________________________________________|")
