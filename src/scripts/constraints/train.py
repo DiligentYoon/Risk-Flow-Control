@@ -188,8 +188,6 @@ def main():
 
         tracking_data["Episode / truncated rate"].append(int(truncated.sum().item()) / env.num_envs)
 
-        tracking_data["Value / V_N"].append(value.mean().item())
-        tracking_data["Value / V_N std"].append(value.std().item())
         tracking_data["Value / Delta_N"].append(delta.mean().item())
         tracking_data["Value / Delta_N std"].append(delta.std().item())
 

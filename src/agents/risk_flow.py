@@ -106,6 +106,11 @@ class RiskFlow(Agent):
         self.target_critic.requires_grad_(False)
         self.target_critic.eval()
 
+        # Target actor
+        self.target_actor = copy.deepcopy(self.actor)
+        self.target_actor.requires_grad_(False)
+        self.target_actor.eval()
+
         # Set up Adam optimizer
         self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=self.critic_learning_rate)
         self.checkpoint_modules["critic_optimizer"] = self.critic_optimizer
@@ -113,6 +118,7 @@ class RiskFlow(Agent):
 
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=self.actor_learning_rate)
         self.checkpoint_modules["actor_optimizer"] = self.actor_optimizer
+        self.checkpoint_modules["target_actor"] = self.target_actor
 
         # Primal-dual multiplier. 
         # it carries how tight the constraint has turned out to be, which costs thousands of steps to rediscover.
@@ -230,7 +236,7 @@ class RiskFlow(Agent):
         next_value, _, _ = self.value_critic(final_constraint_states)
         delta = next_value - value
 
-        next_actions = self.actor(final_observations)
+        next_actions = self.target_actor(final_observations)
         next_flow = self.target_critic(final_constraint_states, next_actions) # [B, H]
 
         mask = (~terminated).to(dtype=next_flow.dtype) # Assumption : risk stays at its maximum after failure.
@@ -293,6 +299,12 @@ class RiskFlow(Agent):
             target_parameter.mul_(1.0 - self.target_update_tau).add_(parameter, alpha=self.target_update_tau)
 
         for target_buffer, buffer in zip(self.target_critic.buffers(), self.critic.buffers()):
+            target_buffer.copy_(buffer)
+
+        for target_parameter, parameter in zip(self.target_actor.parameters(), self.actor.parameters()):
+            target_parameter.mul_(1.0 - self.target_update_tau).add_(parameter, alpha=self.target_update_tau)
+
+        for target_buffer, buffer in zip(self.target_actor.buffers(), self.actor.buffers()):
             target_buffer.copy_(buffer)
 
     def update(self) -> Optional[Dict[str, Any]]:
@@ -419,5 +431,6 @@ class RiskFlow(Agent):
 
         return {
             "lambda": self.lagrange().detach().item(),
+            "constraint_violation": violation.mean().item(),
             "violation_ratio": (violation > 0).to(dtype=violation.dtype).mean().item(),
         }
