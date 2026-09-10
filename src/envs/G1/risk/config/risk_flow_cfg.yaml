@@ -27,7 +27,7 @@ agent:
   critic_learning_rate: 3.0e-04
   target_update_tau: 0.005
   actor_learning_rate: 1.0e-04
-  control_cost_scale: 1.0e-04
+  control_cost_scale: 0.0
 
   # Terminal recovery constraint. Turning the dual off is the `lambda = 0` ablation of plan.md P5.2,
   # not a debug switch: the actor loss then carries the mean flow and the control cost only.

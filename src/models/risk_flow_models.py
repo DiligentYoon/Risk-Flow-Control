@@ -196,7 +196,7 @@ class DeterministicActor(Model):
         """
         standardized_input = self.actor_standardizer.standardize(observations, update=update_rms)
 
-        return self.net(standardized_input)
+        return torch.tanh(self.net(standardized_input))
 
 class LagrangeMultiplier(nn.Module):
     """The multiplier of the terminal recovery constraint ``V_N(s) + D_H <= delta_N``.

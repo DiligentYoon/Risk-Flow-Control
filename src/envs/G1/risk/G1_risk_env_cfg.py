@@ -29,7 +29,7 @@ class G1RiskEnvCfg(G1BaseEnvCfg):
     action_space = 29                         # joint position offsets, native find_joints(".*") order
     observation_space = 96                    # 3 + 3 + 3 + 29 (q) + 29 (q_dot) + 29 (prev_action)
     num_agents = 1
-    action_scale_factor = 0.5
+    action_scale_factor = 5.0
 
     ## ========= Pre-trained Network Setting ========= ##
     # Input of the frozen safety value function V_N.
