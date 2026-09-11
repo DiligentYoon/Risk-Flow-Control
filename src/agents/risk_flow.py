@@ -20,6 +20,7 @@ from __future__ import annotations
 import copy
 from typing import Any, Dict, Optional, Union
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F

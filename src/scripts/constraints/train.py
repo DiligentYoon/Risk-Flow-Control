@@ -26,11 +26,11 @@ parser.add_argument("--video", action="store_true", default=False, help="Record 
 parser.add_argument("--video_length", type=int, default=200, help="Length of the recorded video (in steps).")
 parser.add_argument("--video_interval", type=int, default=2000, help="Interval between video recordings (in steps).")
 parser.add_argument("--disable_fabric", type=bool, default=False, help="Disable fabric and use USD I/O operations.")
-parser.add_argument("--num_envs", type=int, default=128, help="Number of environments to simulate.")
+parser.add_argument("--num_envs", type=int, default=2048, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default="G1-risk", help="Name of the task.")
 parser.add_argument("--timesteps", type=int, default=None, help="Override the number of training steps.")
 parser.add_argument("--checkpoint", type=str, default=None, help="Path to a RiskFlow checkpoint to resume from.")
-parser.add_argument("--predictor_checkpoint", type=str, default="logs/frozen/2026-09-09_13-37-14_mappo/Reach_Avoid/2026-09-09_16-22-22/ra_agent_32000.pt", help="Path to the frozen predictor checkpoint.")
+parser.add_argument("--predictor_checkpoint", type=str, default="/home/aisl/Repos/Risk-Flow-Control/logs/frozen/network/Reach_Avoid/2026-09-09_16-22-22/ra_agent_32000.pt", help="Path to the frozen predictor checkpoint.")
 
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
@@ -146,6 +146,8 @@ def main():
     # ======================= Training ============================
     writer = SummaryWriter(log_dir=log_dir)
     tracking_data = collections.defaultdict(list)
+    track_timesteps = collections.deque(maxlen=env.num_envs)
+    CLI_track_timesteps = collections.deque(maxlen=env.num_envs)
 
     # The per-head losses are summed on the device and averaged at the write interval.
     per_head_sum = torch.zeros(horizon, device=env.device)
@@ -166,6 +168,14 @@ def main():
         actions = agent.act(obs)
         next_obs, _, next_constraint_states, _, terminated, truncated, next_infos = env.step(actions)
 
+        if not torch.all(torch.isfinite(obs)):
+            print(f"The observation diverges at timestep {timestep}")
+            break
+
+        if not torch.all(torch.isfinite(actions)):
+            print(f"The action diverges at timestep {timestep}")
+            break
+        
         # It is the snapshot that carries the state the action actually led to.
         final_observations = next_infos["final_observations"]
         final_constraint_states = next_infos["final_constraint_states"]
@@ -187,7 +197,6 @@ def main():
             delta = final_value - value
 
         tracking_data["Episode / truncated rate"].append(int(truncated.sum().item()) / env.num_envs)
-
         tracking_data["Value / Delta_N"].append(delta.mean().item())
         tracking_data["Value / Delta_N std"].append(delta.std().item())
 
@@ -198,8 +207,8 @@ def main():
 
         if info is not None:
             if not np.isfinite(info["critic_loss"]):
-                raise RuntimeError(f"The critic loss went non-finite at step {timestep}. "
-                                   f"A checkpoint was written to {log_dir}.")
+                print(f"The critic loss diverges at step {timestep}.")
+                break
 
             tracking_data["Loss / critic"].append(info["critic_loss"])
             per_head_sum += info["per_head_loss"]

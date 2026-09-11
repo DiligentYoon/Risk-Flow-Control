@@ -160,14 +160,13 @@ def main():
     episode_steps       = torch.zeros(env.num_envs, device=env.device)
     episode_cost        = torch.zeros(env.num_envs, device=env.device)
     
-    episode_recovery    = torch.full((env.num_envs,), -1.0, device=env.device) # -1 marks "never reached the recoverable set".
     episode_initial_v   = torch.zeros(env.num_envs, device=env.device)
     episode_predicted   = torch.zeros(env.num_envs, device=env.device)
     episode_started     = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
 
+    track_steps       = collections.deque(maxlen=500)
     track_recovered   = collections.deque(maxlen=500)
     track_fell        = collections.deque(maxlen=500)
-    track_recovery    = collections.deque(maxlen=500)
     track_cost        = collections.deque(maxlen=500)
     track_predicted   = collections.deque(maxlen=500)
     track_realized    = collections.deque(maxlen=500)
@@ -182,8 +181,8 @@ def main():
 
             # frozen V_N and the critic it is compared against
             risk_value, _, _ = value_critic(constraint_states)
-            risk_value = risk_value.squeeze(-1)
-            risk_flow = agent.critic(constraint_states, actions)[:, -1]
+            risk_value = risk_value.squeeze(-1) # V_N
+            risk_flow = agent.critic(constraint_states, actions)[:, -1] # D_H
             control_cost = agent.control_cost(constraint_states, actions)
 
             # env stepping
@@ -199,58 +198,52 @@ def main():
         # step tuple already carries the first state of the *next* episode instead.
         with torch.no_grad():
             next_value, _, _ = value_critic(next_infos["final_constraint_states"])
-        next_value = next_value.squeeze(-1)
+        next_value = next_value.squeeze(-1) # V_N(s_{t+1})
 
         # ============ Logging phase =============
 
         # Per-step signals
-        tracking_data["Per step Risk / V_N"].append(torch.mean(risk_value).item())
-        tracking_data["Per step Risk / Delta_N"].append(torch.mean(next_value - risk_value).item())
         tracking_data["Per step Risk / D_H"].append(torch.mean(risk_flow).item())
         tracking_data["Per step Policy / Control Cost"].append(torch.mean(control_cost).item())
 
         # Episode accumulation.
-        fresh = ~episode_started
+        fresh = ~episode_started # New Episode
         if fresh.any():
+            # initial value setting
             episode_initial_v = torch.where(fresh, risk_value, episode_initial_v)
+            # initial prediction value setting
             episode_predicted = torch.where(fresh, risk_flow, episode_predicted)
-            episode_recovery = torch.where(fresh & (risk_value <= threshold),
-                                           torch.zeros_like(episode_recovery), episode_recovery)
+            # Start marking
             episode_started |= fresh
 
         episode_steps += 1.0
         episode_cost += control_cost
-        first_recovery = (episode_recovery < 0) & (next_value <= threshold)
-        episode_recovery = torch.where(first_recovery, episode_steps, episode_recovery)
 
-        finished_episodes = done.nonzero(as_tuple=False).squeeze(-1)
+        finished_episodes = done.nonzero(as_tuple=False).squeeze(-1) # End Episode
         if finished_episodes.numel():
-            # Recovery is read at the end of the episode, so an episode that fell counts as a
-            # failure without a special case: the value that ends it is the V_N at the fall.
+            # episode steps
+            track_steps.extend(episode_steps[finished_episodes].float().reshape(-1).tolist())
+            # whether move from risk to safe
             track_recovered.extend((next_value[finished_episodes] <= threshold).float().reshape(-1).tolist())
+            # terminated episode
             track_fell.extend(terminated[finished_episodes].float().reshape(-1).tolist())
+            # control cost
             track_cost.extend((episode_cost[finished_episodes] / episode_steps[finished_episodes]).reshape(-1).tolist())
-            track_recovery.extend(episode_recovery[finished_episodes].reshape(-1).tolist())
+            # \hat{V_N(s_H) - V_N(s_0)}
             track_predicted.extend(episode_predicted[finished_episodes].reshape(-1).tolist())
+            # V_N(s_{H}) - V_N(s_0)
             track_realized.extend((next_value[finished_episodes] - episode_initial_v[finished_episodes]).reshape(-1).tolist())
 
             # Reset the accumulators of the environments that just started a new episode
             episode_steps[finished_episodes] = 0.0
             episode_cost[finished_episodes] = 0.0
-            episode_recovery[finished_episodes] = -1.0
             episode_started[finished_episodes] = False
 
         # Record cumulative data
-        if len(track_recovered):
-            recovery_np = np.array(track_recovery)
-            reached = recovery_np >= 0
-
+        if len(track_steps):
+            tracking_data["Episode / Episode Steps"].append(np.mean(track_steps))
             tracking_data["Episode / Recovery Success Rate"].append(np.mean(track_recovered))
             tracking_data["Episode / Fall Rate"].append(np.mean(track_fell))
-            tracking_data["Episode / Never Recovered Share"].append(np.mean(~reached))
-            if reached.any():
-                tracking_data["Episode / First Recovery Step"].append(np.mean(recovery_np[reached]))
-                tracking_data["Episode / First Recovery Time (s)"].append(np.mean(recovery_np[reached]) * dt)
             tracking_data["Episode / Control Cost"].append(np.mean(track_cost))
 
             # Critic over-estimation: D_H is the head that telescopes to V_N(s_H) - V_N(s_0).
@@ -259,10 +252,10 @@ def main():
             tracking_data["Prediction / D_H Prediction Error"].append(np.mean(np.abs(predicted_np - realized_np)))
 
             # reset data containers for next iteration
+            track_steps.clear()
             track_recovered.clear()
             track_fell.clear()
             track_cost.clear()
-            track_recovery.clear()
             track_predicted.clear()
             track_realized.clear()
 
@@ -300,7 +293,7 @@ def main():
             done_0 = terminated[0] | truncated[0]
             infos["viz_data"]["risk_value"] = risk_value
             infos["viz_data"]["risk_flow"] = risk_flow
-            infos["viz_data"]["terminal_risk"] = risk_value + risk_flow - threshold
+            # infos["viz_data"]["terminal_risk"] = risk_value + risk_flow - threshold
             plot.append(viz_data=infos["viz_data"], episode_end=done_0)
 
         # Video update

@@ -1,10 +1,10 @@
 seed: 42
 
 train:
-  timesteps: 128000
+  timesteps: 32000
 
 buffer:
-  buffer_size: 512
+  buffer_size: 1024
 
 models:
   critic:
@@ -22,12 +22,12 @@ agent:
   gradient_steps: 1
   grad_norm_clip: 1.0
 
-  exploration_sigma: 0.1
+  exploration_sigma: 0.0
 
   critic_learning_rate: 3.0e-04
   target_update_tau: 0.005
   actor_learning_rate: 1.0e-04
-  control_cost_scale: 0.0
+  control_cost_scale: 1.0e-05
 
   # Terminal recovery constraint. Turning the dual off is the `lambda = 0` ablation of plan.md P5.2,
   # not a debug switch: the actor loss then carries the mean flow and the control cost only.

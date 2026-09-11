@@ -39,7 +39,6 @@ docker/.container.cfg
 
 
 # Outputs
-**/logs/*
 **/figs/*
 **/output/*
 **/videos/*

@@ -15,7 +15,6 @@ from lib.utils.plot_utils import PNGSavePlotter
 
 from envs.G1.base.G1_base_env_cfg import G1BaseEnvCfg
 
-
 @configclass
 class G1RiskEnvCfg(G1BaseEnvCfg):
     ## ==================== Environment parameters ==================== ##
@@ -61,7 +60,7 @@ class G1RiskEnvCfg(G1BaseEnvCfg):
             func=reset_state_from_dataset,
             mode="reset",
             params={
-                "dataset_dir": "logs/frozen/collected",
+                "dataset_dir": "logs/frozen/collected/2",
                 "bucket_weights": self.bucket_weights,
                 "asset_cfg": SceneEntityCfg("robot"),
             },
