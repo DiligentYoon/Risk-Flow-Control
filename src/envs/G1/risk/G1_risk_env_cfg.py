@@ -22,7 +22,8 @@ class G1RiskEnvCfg(G1BaseEnvCfg):
     decimation = 4
 
     # CoM height below which a contact counts as a fall. 
-    termination_height = 0.2
+    termination_height = 0.3
+    termination_ang_vel = 20.0
 
     ## ========== Agent Setting =========== ##
     action_space = 29                         # joint position offsets, native find_joints(".*") order
@@ -60,7 +61,7 @@ class G1RiskEnvCfg(G1BaseEnvCfg):
             func=reset_state_from_dataset,
             mode="reset",
             params={
-                "dataset_dir": "logs/frozen/collected/2",
+                "dataset_dir": "logs/frozen/collected/3",
                 "bucket_weights": self.bucket_weights,
                 "asset_cfg": SceneEntityCfg("robot"),
             },
@@ -86,10 +87,6 @@ class G1RiskPlayEnvCfg(G1RiskEnvCfg):
         # plotter
         self.plotter = PNGSavePlotter
 
-        # The three `risk_*` channels are the algorithm's own quantities, not the simulator's:
-        # `play.py` writes them into `viz_data` before appending a frame, the way
-        # `main/reach_avoid/play.py` injects `risk_value`. They are declared here so that the
-        # plotter allocates a column for them from the first frame.
         self.viz_data = {
             "risk_value": 0.0,          # V_N(s_t)
             "risk_flow": 0.0,           # D_H(s_t, a_t)

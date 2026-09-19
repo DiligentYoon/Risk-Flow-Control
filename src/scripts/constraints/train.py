@@ -69,11 +69,12 @@ def summarize(info) -> list:
     reading them top to bottom is reading the dependency chain.
     """
     def field(label, key, fmt):
-        if info is None or key not in info:
+        if (info is None) or (key not in info) or info[key] is None:
             return f"{label:<14}: -"
         return f"{label:<14}: {info[key]:{fmt}}"
 
     return [
+        field("Episode step", "Episode step", ".3f"),
         field("critic loss", "critic_loss", ".5f"),
         field("actor loss", "actor_loss", ".5f"),
         field("lambda", "lambda", ".5f"),
@@ -145,9 +146,11 @@ def main():
 
     # ======================= Training ============================
     writer = SummaryWriter(log_dir=log_dir)
+    cumulative_timesteps = None
     tracking_data = collections.defaultdict(list)
-    track_timesteps = collections.deque(maxlen=env.num_envs)
+    tracking_timesteps = collections.deque(maxlen=env.num_envs)
     CLI_track_timesteps = collections.deque(maxlen=env.num_envs)
+
 
     # The per-head losses are summed on the device and averaged at the write interval.
     per_head_sum = torch.zeros(horizon, device=env.device)
@@ -196,15 +199,14 @@ def main():
             final_value, _, _ = value_critic(final_constraint_states)
             delta = final_value - value
 
-        tracking_data["Episode / truncated rate"].append(int(truncated.sum().item()) / env.num_envs)
         tracking_data["Value / Delta_N"].append(delta.mean().item())
         tracking_data["Value / Delta_N std"].append(delta.std().item())
 
         # ================== Learning Phase =====================
-        # One gradient step per environment step.
         for _ in range(gradient_steps):
             info = agent.update()
 
+        # =============== Logging Phase ================
         if info is not None:
             if not np.isfinite(info["critic_loss"]):
                 print(f"The critic loss diverges at step {timestep}.")
@@ -224,7 +226,24 @@ def main():
                 tracking_data["Constraint / nu"].append(agent.lagrange.nu.item())
                 tracking_data["Constraint / violating ratio"].append(info["violation_ratio"])
 
-        # =============== Logging Phase ================
+        if cumulative_timesteps is None:
+            cumulative_timesteps = torch.zeros((env.num_envs, 1), dtype=torch.int32)
+        cumulative_timesteps.add_(1)
+
+        done = (terminated | truncated).squeeze(-1)
+        finished_episodes = done.nonzero(as_tuple=False).squeeze(-1)
+        if finished_episodes.numel():
+            tracking_timesteps.extend(cumulative_timesteps[finished_episodes][:, 0].reshape(-1).tolist())
+            CLI_track_timesteps.extend(cumulative_timesteps[finished_episodes][:, 0].detach().cpu().tolist())
+            # Reset
+            cumulative_timesteps[finished_episodes] = 0
+
+        if len(tracking_timesteps):
+            tracking_timesteps_np = np.array(tracking_timesteps)
+            tracking_data["Episode / Total timesteps (mean)"].append(np.mean(tracking_timesteps_np))
+            # Reset
+            tracking_timesteps.clear()
+            
         if timestep % write_interval == 0:
             if per_head_count > 0:
                 per_head_loss = (per_head_sum / per_head_count).cpu().numpy()
@@ -234,6 +253,9 @@ def main():
                 per_head_count = 0
 
             write_tracking(writer, tracking_data, timestep)
+
+        # Inject information for CLI Logging
+        info["Episode step"] = float(np.mean(CLI_track_timesteps)) if len(CLI_track_timesteps) else None
 
         # CLI progress, on the same cadence as the checkpoints
         if timestep % print_interval == 0 or timestep == timesteps:

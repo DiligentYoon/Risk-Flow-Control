@@ -253,14 +253,9 @@ class G1RiskEnv(G1BaseEnv):
 
         base_fall = self.CoM[:, 2] <= self.cfg.termination_height
         died_collision = torch.any(torch.norm(self.illegal_force, dim=-1) > 1.0, dim=1)
-        died_ang_vel = torch.any(torch.abs(self.root_ang_vel_b) > 30.0, dim=-1)
-        # died_arm_collision = torch.any(torch.norm(self.illegal_arm_force, dim=-1) > 1.0, dim=1)
+        died_ang_vel = torch.any(torch.abs(self.root_ang_vel_b) > self.cfg.termination_ang_vel, dim=-1)
 
         died = (died_collision & base_fall) | died_ang_vel
-        # died = (died_collision & base_fall) | died_arm_collision
-
-        # The two reasons stay mutually exclusive: a fall is absorbing, a time-out bootstraps.
-        time_out = time_out & ~died
 
         return died, time_out
 

@@ -81,6 +81,7 @@ class RiskFlow(Agent):
         self.control_cost_scale = self.cfg["control_cost_scale"]
         self.dual_learning_rate = self.cfg["dual_learning_rate"]
         self.terminal_risk_threshold = self.cfg["terminal_risk_threshold"]
+        self.update_actor = self.cfg["update_actor"]
         self.update_dual = self.cfg["update_dual"]
 
         # Analytic PD torque surrogate. 
@@ -339,22 +340,24 @@ class RiskFlow(Agent):
         self.critic_optimizer.step()
 
         # Update Actor Network and Dual Parameter.
-        actor_info, violation = self._update_actor(observations, constraint_states)
-        dual_info = self._update_dual(violation) if violation is not None else {}
+        if self.update_actor:
+            actor_info, violation = self._update_actor(observations, constraint_states)
+            dual_info = self._update_dual(violation) if violation is not None else {}
 
         self.update_target()
 
         with torch.no_grad():
-            # The natural scale of D_h grows with h, so the aggregate loss is dominated by the far
-            # heads. Per-head loss is what actually shows whether the horizon has converged.
             per_head_loss = (flow - target).pow(2).mean(dim=0)
 
-        return {
-            "critic_loss": critic_loss.item(),
-            "per_head_loss": per_head_loss,
-            **actor_info,
-            **dual_info,
-        }
+        if self.update_actor:
+
+            return {"critic_loss": critic_loss.item(),
+                    "per_head_loss": per_head_loss,
+                    **actor_info,
+                    **dual_info}
+        else:
+            return {"critic_loss": critic_loss.item(),
+                    "per_head_loss": per_head_loss}
 
     def _update_actor(self, observations: torch.Tensor, constraint_states: torch.Tensor) -> Dict[str, Any]:
         """Run one actor update.
@@ -387,9 +390,6 @@ class RiskFlow(Agent):
             with torch.no_grad():
                 value, _, _ = self.value_critic(constraint_states)
             violation = value.squeeze(-1) + flow[:, -1] - self.terminal_risk_threshold
-            # lambda is a constant to the policy; the policy is a constant to lambda. Detaching on
-            # exactly one side of each product is what keeps the two optimizations from chasing
-            # each other through a shared graph.
             objective = objective + self.lagrange().detach() * violation
 
         actor_loss = objective.mean()
