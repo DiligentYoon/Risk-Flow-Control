@@ -6,18 +6,18 @@ import copy
 import isaaclab.sim as sim_utils
 from isaaclab.terrains import TerrainImporter
 from isaaclab.markers import VisualizationMarkers
-from isaaclab.utils.math import quat_apply_inverse, yaw_quat, euler_xyz_from_quat, quat_apply, matrix_from_quat
+from isaaclab.utils.math import quat_apply_inverse, yaw_quat, euler_xyz_from_quat, quat_apply
 
 from lib.domain_randomizer.commander import UniformNonHolonomicCommand
 
 from ..R1_base_env import R1BaseEnv
-from .R1_loco_env_cfg import R1LocoEnvCfg, R1LocoPlayEnvCfg
+from .R1_fall_env_cfg import R1FallEnvCfg, R1FallPlayEnvCfg
 
 
 class R1LocoEnv(R1BaseEnv):
-    cfg: R1LocoEnvCfg | R1LocoPlayEnvCfg
+    cfg: R1FallEnvCfg | R1FallPlayEnvCfg
 
-    def __init__(self, cfg: R1LocoEnvCfg | R1LocoPlayEnvCfg, render_mode: str | None = None, **kwargs):
+    def __init__(self, cfg: R1FallEnvCfg | R1FallPlayEnvCfg, render_mode: str | None = None, **kwargs):
         super().__init__(cfg, render_mode, **kwargs)
 
         total_body_ids, _ = self.contact_sensors.find_bodies(".*")
@@ -44,6 +44,7 @@ class R1LocoEnv(R1BaseEnv):
         self.root_lin_vel_w = torch.zeros((self.num_envs, 3), dtype=torch.float, device=self.device)
         self.root_lin_vel_b = torch.zeros((self.num_envs, 3), dtype=torch.float, device=self.device)
         self.root_ang_vel_b = torch.zeros((self.num_envs, 3), dtype=torch.float, device=self.device)
+        self.vel_yaw = torch.zeros((self.num_envs, 3), dtype=torch.float, device=self.device)
         self.root_heading = torch.zeros((self.num_envs, 1), dtype=torch.float, device=self.device)
         self.projected_gravity = torch.zeros((self.num_envs, 3), dtype=torch.float, device=self.device)
         self.joint_pos = torch.zeros((self.num_envs, self._robot.num_joints), dtype=torch.float, device=self.device)
@@ -368,6 +369,7 @@ class R1LocoEnv(R1BaseEnv):
         self.root_lin_vel_w[i] = self._robot.data.root_lin_vel_w[i]
         self.root_lin_vel_b[i] = self._robot.data.root_lin_vel_b[i]
         self.root_ang_vel_b[i] = self._robot.data.root_ang_vel_b[i]
+        self.vel_yaw[i] = quat_apply_inverse(yaw_quat(self.root_rot_w[i]), self.root_lin_vel_w[i, :3])
 
         forward_root_w = quat_apply(self._robot.data.root_quat_w[i], self.forward_vec[i])
         self.root_heading[i] = torch.atan2(forward_root_w[:, 1], forward_root_w[:, 0]).unsqueeze(-1)

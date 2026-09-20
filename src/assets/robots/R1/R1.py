@@ -25,8 +25,6 @@ Path(R1_ASSET["usd_dir"]).mkdir(parents=True, exist_ok=True)
 # URDF -> USD conversion
 # -----------------------------------------------------------------------------
 
-ENABLE_SELF_COLLISIONS = False
-
 urdf_cfg = sim_utils.UrdfConverterCfg(
     asset_path=R1_ASSET["urdf_path"],
     usd_dir=R1_ASSET["usd_dir"],
@@ -36,7 +34,7 @@ urdf_cfg = sim_utils.UrdfConverterCfg(
     make_instanceable=True,
     force_usd_conversion=False,
     collision_from_visuals=False,
-    self_collision=ENABLE_SELF_COLLISIONS,
+    self_collision=False,
     joint_drive=sim_utils.UrdfConverterCfg.JointDriveCfg(
         drive_type="force",
         target_type="position",
