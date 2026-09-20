@@ -27,7 +27,7 @@ parser.add_argument("--video_length", type=int, default=500, help="Length of the
 parser.add_argument("--video_interval", type=int, default=2000, help="Interval between video recordings (in steps).")
 parser.add_argument("--disable_fabric", type=bool, default=False, help="Disable fabric and use USD I/O operations.")
 parser.add_argument("--num_envs", type=int, default=4096, help="Number of environments to simulate.")
-parser.add_argument("--task", type=str, default="WF-GOAT-track", help="Name of the task.")
+parser.add_argument("--task", type=str, default="R1-loco", help="Name of the task.")
 parser.add_argument("--checkpoint", type=str, default=None, help="Path to model checkpoint.")
 
 parser.add_argument("--algorithm",
@@ -57,6 +57,7 @@ simulation_app = app_launcher.app
 """Rest everything follows."""
 
 import lib
+import tasks
 
 from wrapper.isaaclab_wrapper import IsaacLabWrapper
 from wrapper.record_wrapper import RecordVideo

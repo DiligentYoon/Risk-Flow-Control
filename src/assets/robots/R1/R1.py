@@ -107,9 +107,8 @@ R1_CFG: ArticulationCfg = ArticulationCfg(
     # Initial state
     # -------------------------------------------------------------------------
     init_state=ArticulationCfg.InitialStateCfg(
-        # Provisional spawn height.
-        # Fine-tune after checking the foot sole height in Isaac Sim.
-        pos=(0.0, 0.0, 0.75),
+        # Spawn height
+        pos=(0.0, 0.0, 0.73),
 
         joint_pos={
             # -----------------------------------------------------------------
@@ -117,9 +116,9 @@ R1_CFG: ArticulationCfg = ArticulationCfg(
             # -----------------------------------------------------------------
             ".*_hip_yaw_joint": 0.0,
             ".*_hip_roll_joint": 0.0,
-            ".*_hip_pitch_joint": -0.30,
-            ".*_knee_joint": 0.60,
-            ".*_ankle_pitch_joint": -0.30,
+            ".*_hip_pitch_joint": -0.1745,
+            ".*_knee_joint": 0.4363,
+            ".*_ankle_pitch_joint": -0.2793,
             ".*_ankle_roll_joint": 0.0,
             # -----------------------------------------------------------------
             # Waist
@@ -128,12 +127,12 @@ R1_CFG: ArticulationCfg = ArticulationCfg(
             # -----------------------------------------------------------------
             # Arms
             # -----------------------------------------------------------------
-            "left_shoulder_pitch_joint": 0.20,
-            "right_shoulder_pitch_joint": 0.20,
-            "left_shoulder_roll_joint": 0.20,
-            "right_shoulder_roll_joint": -0.20,
+            "left_shoulder_pitch_joint": 0.0,
+            "right_shoulder_pitch_joint": 0.0,
+            "left_shoulder_roll_joint": 0.2182,
+            "right_shoulder_roll_joint": -0.2182,
             ".*_shoulder_yaw_joint": 0.0,
-            ".*_elbow_joint": 0.40,
+            ".*_elbow_joint": 1.5010,
             ".*_wrist_roll_joint": 0.0,
             # -----------------------------------------------------------------
             # Head
