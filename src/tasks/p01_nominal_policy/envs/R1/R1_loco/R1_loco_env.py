@@ -208,12 +208,12 @@ class R1LocoEnv(R1BaseEnv):
 
     def _get_rewards(self) -> torch.Tensor:
         lin_vel_error = torch.sum(torch.square(self.command_inputs_b[:, :2] - self.root_lin_vel_b[:, :2]), dim=-1)
-        ang_vel_error = torch.sum(torch.abs(self.command_inputs_b[:, 2] - self.root_ang_vel_b[:, 2]))
+        ang_vel_error = torch.abs(self.command_inputs_b[:, 2] - self.root_ang_vel_b[:, 2])
         heading_error = torch.square(wrap_to_pi(self.command_heading[:, 0] - self.root_heading[:, 0]))
         height_error = torch.square(self.root_pos_w[:, 2] - self.cfg.target_height)
 
         lin_vel_rewards = torch.exp(-lin_vel_error / 0.2)
-        ang_vel_rewards = torch.exp(-ang_vel_error / 0.2)
+        ang_vel_rewards = torch.exp(-ang_vel_error / 0.5)
         heading_rewards = torch.exp(-heading_error / 0.1)
         height_rewards = torch.exp(-height_error / 0.1)
 

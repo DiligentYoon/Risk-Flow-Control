@@ -33,24 +33,24 @@ class R1LocoEnvCfg(R1BaseEnvCfg):
     # action_scale_factor = 0.5
 
     ## ==================== Reward Shaping ==================== ##
-    r_track_lin_vel: float = 6.0
-    r_track_ang_vel: float = 6.0
-    r_track_heading: float = 2.0
+    r_track_lin_vel: float = 8.0
+    r_track_ang_vel: float = 8.0
+    r_track_heading: float = 0.0
     r_track_height: float = 2.0
     r_feet_gait: float = 10.0
     r_flat: float = 2.0
     
     p_support_xy: float = 1.0
     p_lin_vel_z: float = 2.0
-    p_ang_vel_xy: float = 0.1
+    p_ang_vel_xy: float = 0.5
     p_joint_torque: float = 1.0e-7
     p_joint_torque_limit: float = 1.0e-5
     p_joint_vel: float = 1.0e-4
 
     p_limits: float = 10.0
     p_deviation_swing: float = 2.0
-    p_deviation_hip: float = 2.0
-    p_deviation_arm: float = 2.0
+    p_deviation_hip: float = 1.0
+    p_deviation_arm: float = 1.0
     p_action_rate: float = 1.0e-3
 
     p_termination: float = 200
@@ -83,7 +83,6 @@ class R1LocoEnvCfg(R1BaseEnvCfg):
             lin_vel_x=(0.0, 2.0),
             lin_vel_y=(0.0, 0.0),
             ang_vel_z=(-1.0, 1.0),
-            heading=(0.0, 0.0),
         ),
     )
 
@@ -111,6 +110,8 @@ class R1LocoEnvCfg(R1BaseEnvCfg):
 
     def __post_init__(self):
         super().__post_init__()
+
+        self.robot.spawn.articulation_props.enabled_self_collisions = True
 
         self.events.push_robot.interval_range_s = (4.0, 5.0)
         self.events.push_robot.params["velocity_range"] = {

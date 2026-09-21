@@ -32,13 +32,13 @@ parser.add_argument("--checkpoint", type=str, default=None, help="Path to model 
 
 parser.add_argument("--algorithm",
                     type=str,
-                    default="PPO",
+                    default="MAPPO",
                     choices=["PPO", "SAC", "TD3", "MAPPO"],
                     help="The RL algorithm used for training the agent.")
 
 parser.add_argument("--model",
                     type=str,
-                    default="MLP",
+                    default="Shared",
                     choices=["MLP", "Shared"],
                     help="The NN model used for training the agent.")
 
