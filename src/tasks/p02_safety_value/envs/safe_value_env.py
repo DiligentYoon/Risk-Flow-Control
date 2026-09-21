@@ -79,7 +79,7 @@ class SafeValueEnv(Env):
         self.final_obs_buf = obs
         self.final_safety_state_buf = self.safety_state_buf
 
-        extras = dict(extras)
+        extras = dict(self.extras)
 
         return obs, states, self.safety_state_buf, self.final_obs_buf, self.final_safety_state_buf, extras
 
@@ -168,8 +168,12 @@ class SafeValueEnv(Env):
         self.safety_state_buf = self._get_safety_states()
 
         # update final components
-        self.final_obs_buf = self.obs_buf.clone()
-        self.final_obs_buf[reset_env_ids] = final_obs_buf[reset_env_ids]
+        if isinstance(self.obs_buf, dict):
+            for key, value in self.obs_buf.items():
+                self.final_obs_buf[key][reset_env_ids] = value[reset_env_ids].clone()
+        else:
+            self.final_obs_buf = self.obs_buf.clone()
+            self.final_obs_buf[reset_env_ids] = final_obs_buf[reset_env_ids]
         self.final_safety_state_buf = final_safety_state_buf
 
         # update viz data

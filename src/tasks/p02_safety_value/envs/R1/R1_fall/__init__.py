@@ -9,6 +9,7 @@ gym.register(
         "env_cfg_entry_point": f"{__name__}.R1_fall_env_cfg:R1FallEnvCfg",
         "rl_ppo_cfg_entry_point": f"{__name__}.cfg:ppo_cfg.yaml",
         "rl_mappo_cfg_entry_point": f"{__name__}.cfg:mappo_cfg.yaml",
+        "predictor_cfg_entry_point": f"{__name__}.cfg:predictor_cfg.yaml",
     }
 )
 
@@ -21,5 +22,6 @@ gym.register(
         "env_cfg_entry_point": f"{__name__}.R1_fall_env_cfg:R1FallPlayEnvCfg",
         "rl_ppo_cfg_entry_point": f"{__name__}.cfg:ppo_cfg.yaml",
         "rl_mappo_cfg_entry_point": f"{__name__}.cfg:mappo_cfg.yaml",
+        "predictor_cfg_entry_point": f"{__name__}.cfg:predictor_cfg.yaml",
     }
 )
