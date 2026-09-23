@@ -301,9 +301,7 @@ def main() -> None:
 
             print(
                 f"[EVAL] step={timestep}/{args_cli.video_length} | "
-                f"episodes={metrics['num_episodes']} | "
                 f"segments={metrics['num_segments']} | "
-                f"samples={metrics['num_samples']} | "
                 f"RCR={metrics['risk_coverage_rate']:.4f} | "
                 f"DR={metrics['detection_rate']:.4f} | "
                 f"FAR={metrics['false_alarm_rate']:.4f} | "
@@ -336,9 +334,8 @@ def main() -> None:
     print("=" * 80)
     print("ONLINE SAFETY VALUE EVALUATION")
     print("=" * 80)
-    print(f"Completed episodes     : {metrics['num_episodes']}")
     print(f"Completed segments     : {metrics['num_segments']}")
-    print(f"Evaluation samples     : {metrics['num_samples']}")
+    print(f"Risk coverage rate     : {metrics['risk_coverage_rate'] * 100:.2f}")
     print(f"Detection rate         : {metrics['detection_rate'] * 100:.2f}%")
     print(f"False alarm rate       : {metrics['false_alarm_rate'] * 100:.2f}%")
     print(f"Accuracy               : {metrics['accuracy'] * 100:.2f}%")

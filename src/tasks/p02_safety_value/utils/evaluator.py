@@ -34,6 +34,7 @@ class RolloutEvaluator:
         self.segment_fp = 0
         self.segment_tn = 0
         self.risk_persistence = 10
+        self.safe_persistence = self.risk_persistence
 
         self.num_segments = 0
         self.num_samples = 0
@@ -199,8 +200,6 @@ class RolloutEvaluator:
             "real_risk_rate": self._safe_div(self.tp + self.fn, self.num_samples),
             "pred_risk_rate": self._safe_div(self.tp + self.fp, self.num_samples),
             "num_segments": self.num_segments,
-            "num_samples": self.num_samples,
-            "num_episodes": self.num_episodes,
             "num_terminated": self.num_terminated,
             "num_truncated": self.num_truncated,
         }
@@ -226,6 +225,29 @@ class RolloutEvaluator:
         pred_risk = pred_values > self.threshold
         empirical_risk = empirical_values > self.threshold
 
+        risk_step = 0
+        safe_step = 0
+        decision = np.zeros_like(pred_risk, dtype=np.bool_)
+        for i in range(len(pred_risk)):
+            if push_events[i]:
+                risk_step = 0
+            if pred_risk[i]:
+                risk_step += 1
+                safe_step = 0
+                decision[i] = risk_step >= self.risk_persistence
+            else:
+                risk_step = 0
+                safe_step += 1
+                if i > 0:
+                    if terminated[i-1] or truncated[i-1]:
+                        continue
+                    else:
+                        if decision[i-1]:
+                            decision[i] = safe_step < self.safe_persistence
+
+            if terminated[i] or truncated[i]:
+                risk_step = 0
+
         fig, axes = plt.subplots(2, 1, figsize=(16, 8), sharex=True)
 
         # ====================== Value ====================== #
@@ -240,7 +262,7 @@ class RolloutEvaluator:
 
         # ====================== Risk classification ====================== #
         axes[1].step(time_axis, empirical_risk.astype(float), where="post", linestyle="--", label="Empirical future risk")
-        axes[1].step(time_axis, pred_risk.astype(float), where="post", label="Predicted risk")
+        axes[1].step(time_axis, decision.astype(float), where="post", label="Predicted risk")
 
         axes[1].set_yticks([0, 1])
         axes[1].set_yticklabels(["Safe", "Risk"])
