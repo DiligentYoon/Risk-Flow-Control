@@ -20,8 +20,8 @@ agent:
 collection:
   capacity_per_bucket: 100000
   thresholds:
-    low_high: -0.1
-    mid_high: 0.5
+    low_high: -0.2
+    mid_high: 0.4
   max_timestep: 64000
   warmup_skip_steps: 4
   subsample_stride: 4

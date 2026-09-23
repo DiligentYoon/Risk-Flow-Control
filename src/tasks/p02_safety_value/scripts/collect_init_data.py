@@ -16,7 +16,7 @@ parser.add_argument("--video", action="store_true", default=False, help="Record 
 parser.add_argument("--video_length", type=int, default=500, help="Length of the recorded video (in steps).")
 parser.add_argument("--disable_fabric", type=bool, default=False, help="Disable fabric and use USD I/O operations.")
 parser.add_argument("--num_envs", type=int, default=2048, help="Number of environments (overrides cfg default if given).")
-parser.add_argument("--task", type=str, default="G1-fall-collect", help="Name of the task.")
+parser.add_argument("--task", type=str, default="R1-collect", help="Name of the task.")
 parser.add_argument("--checkpoint", type=str, required=True, help="Path to nominal policy checkpoint.")
 parser.add_argument("--predictor_checkpoint", type=str, required=True, help="Path to trained Reach-Avoid value checkpoint.")
 
@@ -56,16 +56,15 @@ from wrapper.isaaclab_wrapper import IsaacLabWrapper
 from wrapper.record_wrapper import RecordVideo
 from lib.utils.parse_utils import parse_env_cfg, load_cfg_from_registry
 from lib.buffer.rolloutbuffer import RolloutBuffer
-from lib.buffer.reach_avoid.riskbuffer import RiskClassifiedBuffer
 from lib.model.model_factory import ModelFactory
 
+from tasks.p02_safety_value.buffer.risk_classified_buffer import RiskClassifiedBuffer
+from tasks.p02_safety_value.wrappers.safety_wrapper import SafetyEnvWrapper, SafetyEnvRecordVideo
 
 algorithm = args_cli.algorithm.lower()
 model = args_cli.model.lower() if args_cli.model is not None else None
 
-
 # ============================ Helpers ============================
-
 
 def extract_physical_snapshot(info) -> dict[str, torch.Tensor]:
     """Read root + joint state"""
@@ -146,144 +145,166 @@ def main():
 
     try:
         cfg = load_cfg_from_registry(args_cli.task, f"rl_{algorithm}_cfg_entry_point")
-        ra_cfg = load_cfg_from_registry(args_cli.task, "ra_cfg_entry_point")
+        pred_cfg = load_cfg_from_registry(args_cli.task, "predictor_cfg_entry_point")
+        collection_cfg = pred_cfg["collection"]
     except ValueError as e:
         print(e)
         return
-    
-    collection_cfg = ra_cfg["collection"]
 
     # save_dir = next to predictor_checkpoint
-    save_dir = os.path.join(
-        os.path.dirname(os.path.abspath(args_cli.predictor_checkpoint)),
-        collection_cfg.get("save_subdir", "collected"),)
+    save_dir = os.path.join(os.path.dirname(os.path.abspath(args_cli.predictor_checkpoint)),
+                            collection_cfg.get("save_subdir", "collected"),)
 
     # ============================ Env & Wrapper Spawn ================================
-    seed = args_cli.seed if args_cli.seed is not None else ra_cfg.get("seed", 42)
+    seed = args_cli.seed if args_cli.seed is not None else pred_cfg.get("seed", 42)
     env_cfg.seed = seed
     cfg["agent"]["seed"] = seed
-    ra_cfg["ra"]["agent"]["seed"] = seed
+    pred_cfg["agent"]["seed"] = seed
 
     env_cfg.total_timesteps = cfg["train"]["timesteps"]
     env = gym.make(args_cli.task, cfg=env_cfg,
                    render_mode="rgb_array" if args_cli.video else None)
 
-    if args_cli.video:
-        video_kwargs = {
-            "video_folder": os.path.join(save_dir, "videos"),
-            "step_trigger": lambda step: step == 0,
-            "video_length": args_cli.video_length,
-            "disable_logger": True,
-        }
-        print("[INFO] Recording video during collection.")
-        env = RecordVideo(env, **video_kwargs)
+    env = SafetyEnvWrapper(env)
 
-    env = IsaacLabWrapper(env)
-
-    # ======================= Policy buffer / model / agent (frozen) =========================
+    # ============================= Nominal Buffer ============================= #
     multi_agent = algorithm == "mappo"
     cfg["models"]["multi_agent"] = multi_agent
+
     if cfg["buffer"]["buffer_size"] == -1:
         cfg["buffer"]["buffer_size"] = cfg["agent"]["rollouts"]
     else:
-        raise RuntimeError("Replaybuffer for Off-policy algorithm is not implemented yet.")
+        raise RuntimeError("Replaybuffer for off-policy nominal algorithms is not implemented.")
 
     possible_agents = None
+
     if multi_agent:
-        obs_size, state_size, act_size = {}, {}, {}
+        obs_size = {}
+        state_size = {}
+        act_size = {}
         buffers = {}
+
         possible_agents = env._unwrapped.cfg.possible_agents
+
         for uid in possible_agents:
             observation_space = env.observation_space[uid]
             action_space = env.action_space[uid]
+
             if env.state_space:
                 state_space = env.state_space[uid]
                 cfg["agent"]["async_actor_critic"] = True
             else:
                 state_space = None
                 cfg["agent"]["async_actor_critic"] = False
-            buf = RolloutBuffer(cfg["buffer"]["buffer_size"], env.num_envs, device=env.device)
-            buf.init_buffer(observation_space, state_space, action_space)
-            buffers[uid] = buf
-            obs_size[uid] = buf.tensors["observations"].shape[-1]
-            state_size[uid] = buf.tensors["states"].shape[-1] if env.state_space else obs_size[uid]
-            act_size[uid] = buf.tensors["actions"].shape[-1]
+
+            buffer = RolloutBuffer(cfg["buffer"]["buffer_size"], env.num_envs, device=env.device)
+            buffer.init_buffer(observation_space, state_space, action_space)
+
+            buffers[uid] = buffer
+            obs_size[uid] = buffer.tensors["observations"].shape[-1]
+            state_size[uid] = buffer.tensors["states"].shape[-1] if env.state_space else obs_size[uid]
+            act_size[uid] = buffer.tensors["actions"].shape[-1]
+
     else:
         observation_space = env.observation_space
         action_space = env.action_space
+
         if env.state_space:
             state_space = env.state_space
             cfg["agent"]["async_actor_critic"] = True
         else:
             state_space = None
             cfg["agent"]["async_actor_critic"] = False
+
         buffer = RolloutBuffer(cfg["buffer"]["buffer_size"], env.num_envs, device=env.device)
         buffer.init_buffer(observation_space, state_space, action_space)
+
         obs_size = buffer.tensors["observations"].shape[-1]
         state_size = buffer.tensors["states"].shape[-1] if env.state_space else obs_size
         act_size = buffer.tensors["actions"].shape[-1]
 
+    # ============================= Nominal Model ============================= #
     if model is not None:
         cfg["models"]["model_type"] = model
 
     model_manager = ModelFactory(cfg=cfg["models"], device=env.device)
-    if model_manager.model_class == "mlp":
-        models = model_manager.generate_mlp_models(
-            observation_size=obs_size, state_size=state_size,
-            action_size=act_size, possible_agents=possible_agents,
-        )
-    else:
-        raise RuntimeError("Not supported class")
 
+    if model_manager.model_class != "mlp":
+        raise RuntimeError("Not supported model class.")
+
+    models = model_manager.generate_mlp_models(
+        observation_size=obs_size,
+        state_size=state_size,
+        action_size=act_size,
+        possible_agents=possible_agents,
+    )
+
+    # ============================= Nominal Agent ============================= #
     if multi_agent:
         if model_manager.model_type == "mlp":
             from lib.agent.mappo import MAPPO
-            agent = MAPPO(observation_space=env.observation_space,
-                          state_space=env.state_space,
-                          action_space=env.action_space,
-                          possible_agents=possible_agents,
-                          model=models, buffer=buffers,
-                          device=env.device, cfg=cfg["agent"])
+
+            agent = MAPPO(
+                observation_space=env.observation_space,
+                state_space=env.state_space,
+                action_space=env.action_space,
+                possible_agents=possible_agents,
+                model=models,
+                buffer=buffers,
+                device=env.device,
+                cfg=cfg["agent"],
+            )
+
         elif model_manager.model_type == "shared":
             from lib.agent.cooperative_mappo import CooperativeMAPPO
-            agent = CooperativeMAPPO(observation_space=env.observation_space,
-                                     state_space=env.state_space,
-                                     action_space=env.action_space,
-                                     possible_agents=possible_agents,
-                                     model=models, buffer=buffers,
-                                     device=env.device, cfg=cfg["agent"])
+
+            agent = CooperativeMAPPO(
+                observation_space=env.observation_space,
+                state_space=env.state_space,
+                action_space=env.action_space,
+                possible_agents=possible_agents,
+                model=models,
+                buffer=buffers,
+                device=env.device,
+                cfg=cfg["agent"],
+            )
+
         else:
-            raise RuntimeError("Unvalid model type.")
+            raise RuntimeError("Invalid multi-agent model type.")
+
     else:
         from lib.agent.ppo import PPO
-        agent = PPO(model=models, buffer=buffer,
-                    device=env.device, cfg=cfg["agent"])
 
-    # ============= RA Model & Agent (frozen) ===============
-    from lib.model.MLP import RA_Critic
-    from lib.agent.reach_avoid import ReachAvoid
-    from lib.buffer.reach_avoid.replaybuffer import HindSightReplayBuffer
+        agent = PPO(
+            model=models,
+            buffer=buffer,
+            device=env.device,
+            cfg=cfg["agent"],
+        )
 
-    if not hasattr(env._unwrapped.cfg, "ra_state_space"):
-        raise RuntimeError("Explicit state space is not defined.")
+    # ============================= Safety Predictor ============================= #
+    from tasks.p02_safety_value.agent.safety import Safety
+    from tasks.p02_safety_value.model.safety import SafetyCritic
 
-    # ReachAvoid requires a buffer arg; collection does not write to it.
-    ra_buffer = HindSightReplayBuffer(1, env.num_envs, device=env.device)
-    ra_buffer.init_buffer(env._unwrapped.cfg.ra_state_space)
-    ra_model = {"critic": RA_Critic(env._unwrapped.cfg.ra_state_space, env.device)}
-    ra_agent = ReachAvoid(ra_model, ra_buffer, device=env.device, cfg=ra_cfg["ra"]["agent"])
+    num_safety_states = env._unwrapped.num_safety_states
+    pred_model = {"critic_1": SafetyCritic(num_states=num_safety_states, device=env.device),
+                  "critic_2": SafetyCritic(num_states=num_safety_states, device=env.device)}
+    pred_agent = Safety(model=pred_model, device=env.device, cfg=pred_cfg["agent"])
 
-    # Load checkpoints (both required)
-    agent.load(os.path.abspath(args_cli.checkpoint))
-    print(f"[INFO] Loaded nominal policy from {args_cli.checkpoint}")
-    ra_agent.load(os.path.abspath(args_cli.predictor_checkpoint))
-    print(f"[INFO] Loaded RA critic from {args_cli.predictor_checkpoint}")
+    # ============================= Checkpoints ============================= #
+    nominal_checkpoint = os.path.abspath(args_cli.checkpoint)
+    predictor_checkpoint = os.path.abspath(args_cli.predictor_checkpoint)
+    agent.load(nominal_checkpoint)
+    pred_agent.load(predictor_checkpoint)
 
     agent.set_running_mode("eval")
-    ra_agent.set_running_mode("eval")
+    pred_agent.set_running_mode("eval")
+
+    print(f"[INFO] Nominal checkpoint: {nominal_checkpoint}")
+    print(f"[INFO] Predictor checkpoint: {predictor_checkpoint}")
 
     # ============= Risk-classified buffer ===============
-    joint_dim = env._unwrapped._robot.data.joint_pos.shape[-1]
+    joint_dim = env._unwrapped._robot.num_joints
     risk_buffer = RiskClassifiedBuffer(
         capacity_per_bucket=int(collection_cfg["capacity_per_bucket"]),
         thresholds=(float(collection_cfg["thresholds"]["low_high"]),
@@ -298,30 +319,45 @@ def main():
     max_timestep = int(collection_cfg["max_timestep"])
     log_interval = 500
 
-    skip_remaining = torch.full((env.num_envs,), warmup_skip,
-                                dtype=torch.long, device=env.device)
+    skip_remaining = torch.full((env.num_envs,), warmup_skip, dtype=torch.long, device=env.device)
     stride_counter = torch.zeros((env.num_envs,), dtype=torch.long, device=env.device)
 
-    obs, states, infos = env.reset()
+    obs, states, safety_states, infos = env.reset()
+
     timestep = 0
     t_start = time.time()
-
     while simulation_app.is_running() and timestep < max_timestep:
         with torch.no_grad():
-            actions,  _, _ = agent.act(obs, infos, timestep=timestep, deterministic=True)
-            risk_scores, _, _ = ra_agent.critic(infos["ra_states"], update_rms=False)
+            actions, _, _ = agent.act(obs, infos, timestep=timestep, deterministic=True)
+
+            (
+                next_obs,
+                next_states,
+                next_safety_states,
+                next_safety_values,
+                final_safety_states,
+                final_safety_values,
+                rewards,
+                terminated,
+                truncated,
+                final_push_events,
+                next_infos,
+            ) = env.step(actions)
+
+            pred_values = pred_agent.predict(final_safety_states).squeeze(-1)
             snapshot = extract_physical_snapshot(infos["collection"])
-            next_obs, next_states, _, terminated, truncated, next_infos = env.step(actions)
 
-        valid_mask = build_valid_mask(skip_remaining, terminated,
-                                      stride_counter, subsample_stride)
-        risk_buffer.add(snapshot=snapshot, risk_scores=risk_scores, valid_mask=valid_mask)
-
-        update_counters(skip_remaining, stride_counter,
-                        done=(terminated | truncated),
-                        reset_value=warmup_skip)
+        valid_mask = build_valid_mask(skip_remaining, terminated, stride_counter, subsample_stride)
+        risk_buffer.add(snapshot=snapshot, risk_scores=pred_values, valid_mask=valid_mask)
+        update_counters(skip_remaining, stride_counter, done=(terminated | truncated), reset_value=warmup_skip)
 
         timestep += 1
+
+        obs = next_obs
+        states = next_states
+        safety_states = next_safety_states
+        safety_values = next_safety_values
+        infos = next_infos
 
         if timestep % log_interval == 0:
             elapsed = time.time() - t_start
@@ -331,10 +367,6 @@ def main():
         if risk_buffer.is_full():
             print("[INFO] All buckets reached capacity. Stopping.")
             break
-
-        obs = next_obs
-        states = next_states
-        infos = next_infos
 
     # ============= Save & summary ===============
     risk_buffer.save(save_dir)
