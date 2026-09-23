@@ -58,7 +58,7 @@ import envs
 
 from lib.utils.parse_utils import load_cfg_from_registry, parse_env_cfg
 
-from wrappers.constraints_wrapper import ConstraintsRecordVideo, ConstraintsWrapper
+from tasks.p03_safe_policy.wrappers.constraints_wrapper import ConstraintsRecordVideo, ConstraintsWrapper
 
 from ..buffer.risk_flow_buffer import RiskFlowBuffer
 from .utils import build_agent, build_models, build_predictor, resolve_horizon, write_tracking, print_progress
