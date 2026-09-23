@@ -18,13 +18,17 @@ class SafetyCritic(Model):
         # Backbone
         self.net = nn.Sequential(nn.Linear(self.num_states, 256),
                                  nn.ELU(),
-                                 nn.Linear(256, 128),
+                                 nn.Linear(256, 256),
                                  nn.ELU(),
-                                 nn.Linear(128, 1))
+                                 nn.Linear(256, 1))
 
         # Initialize parameters
         self.init_weights()
         self.init_biases(val=0)
+
+        # optimistic initialization for self-reinforcing error propagation
+        nn.init.zeros_(self.net[-1].weight)
+        nn.init.constant_(self.net[-1].bias, -1.0) # minimum of safety target value = -1
 
     def forward(self, inputs: torch.Tensor, deterministic: bool = False, update_rms: bool = False):
         """

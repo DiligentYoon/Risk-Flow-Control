@@ -46,8 +46,7 @@ class SafeValueEnv(Env):
         # `_get_observations` / `_get_safety_states` build a fresh tensor on every call, so
         # holding references is enough -- copying into pre-allocated buffers would only add work.
         self.safety_state_buf: torch.Tensor | None = None
-        self.final_obs_buf: torch.Tensor | None = None
-        self.final_safety_state_buf: torch.Tensor | None = None
+        self.push_event_buf = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
 
     """
     Properties
@@ -76,12 +75,11 @@ class SafeValueEnv(Env):
         obs, states, extras = super().reset(seed=seed, options=options)
 
         self.safety_state_buf = self._get_safety_states()
-        self.final_obs_buf = obs
-        self.final_safety_state_buf = self.safety_state_buf
+        self.push_event_buf.zero_()
 
         extras = dict(self.extras)
 
-        return obs, states, self.safety_state_buf, self.final_obs_buf, self.final_safety_state_buf, extras
+        return obs, states, self.safety_state_buf, extras
 
     def step(
         self, action: Union[torch.Tensor, Dict[str, torch.Tensor]]
@@ -142,7 +140,7 @@ class SafeValueEnv(Env):
         self.reward_buf = self._get_rewards()
 
         # capture the state that actually followed the action, before the same-step reset overwrites it for the terminated environments
-        final_obs_buf, final_safety_state_buf = self._capture_final_states()
+        final_safety_state_buf, final_safety_value_buf, final_push_event_buf = self._capture_final_states()
 
         # -- reset envs that terminated/timed-out and log the episode information
         reset_env_ids = self.reset_buf.nonzero(as_tuple=False).squeeze(-1)
@@ -153,6 +151,7 @@ class SafeValueEnv(Env):
                 for _ in range(self.cfg.num_rerenders_on_reset):
                     self.sim.render()
 
+        # command update
         if self.cfg.commands is not None and hasattr(self, "commands"):
             self.commands.update()
 
@@ -166,15 +165,7 @@ class SafeValueEnv(Env):
         self.obs_buf = self._apply_observation_noise(self._get_observations())
         self.state_buf = self._get_states()
         self.safety_state_buf = self._get_safety_states()
-
-        # update final components
-        if isinstance(self.obs_buf, dict):
-            for key, value in self.obs_buf.items():
-                self.final_obs_buf[key][reset_env_ids] = value[reset_env_ids].clone()
-        else:
-            self.final_obs_buf = self.obs_buf.clone()
-            self.final_obs_buf[reset_env_ids] = final_obs_buf[reset_env_ids]
-        self.final_safety_state_buf = final_safety_state_buf
+        self.safety_value_buf = self._get_safety_values()
 
         # update viz data
         if self.cfg.viz_data is not None:
@@ -187,11 +178,13 @@ class SafeValueEnv(Env):
             self.obs_buf,
             self.state_buf,
             self.safety_state_buf,
-            self.final_obs_buf,
-            self.final_safety_state_buf,
+            self.safety_value_buf,
+            final_safety_state_buf,
+            final_safety_value_buf,
             self.reward_buf,
             self.reset_terminated,
             self.reset_time_outs,
+            final_push_event_buf,
             extras,
         )
 
@@ -201,14 +194,26 @@ class SafeValueEnv(Env):
 
     @abstractmethod
     def _get_safety_states(self) -> torch.Tensor:
-        """Compute and return the input of the frozen safety networks.
+        """Compute and return the input of the safety networks.
 
         Returns:
             The safety states for the environment. Shape is
-            (num_envs, constraint_state_space).
+            (num_envs, safety_state_space).
         """
         raise NotImplementedError(
             f"Please implement the '_get_safety_states' method for {self.__class__.__name__}."
+        )
+
+    @abstractmethod
+    def _get_safety_values(self) -> torch.Tensor:
+        """Compute and return the safety value.
+
+        Returns:
+            The safety values for the environment. Shape is
+            (num_envs, 1).
+        """
+        raise NotImplementedError(
+            f"Please implement the '_get_safety_values' method for {self.__class__.__name__}."
         )
 
     """
@@ -224,17 +229,21 @@ class SafeValueEnv(Env):
         self.single_observation_space["safety"] = spec_to_gym_space(self.cfg.safety_state_space)
         self.safety_state_space = gym.vector.utils.batch_space(self.single_observation_space["safety"], self.num_envs)
 
-    def _capture_final_states(self) -> tuple[torch.Tensor, torch.Tensor]:
+    def _capture_final_states(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Snapshot the true next state before the same-step autoreset discards it.
 
         Called once per step, after the termination flags and rewards have been computed and before
         any environment is reset. At this point the simulator and the cached intermediate values
         still describe the state reached by the last action, for every environment.
         """
-        final_obs_buf = self._apply_observation_noise(self._get_observations())
         final_safety_state_buf = self._get_safety_states()
+        final_safety_value_buf = self._get_safety_values()
+        final_push_event_buf   = self.push_event_buf.clone()
 
-        return final_obs_buf, final_safety_state_buf
+        # reset push event buf
+        self.push_event_buf.zero_()
+
+        return final_safety_state_buf, final_safety_value_buf, final_push_event_buf
 
     def _apply_action_noise(self, action: torch.Tensor) -> torch.Tensor:
         """Apply the configured noise model to the actions."""

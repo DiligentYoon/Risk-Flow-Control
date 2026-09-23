@@ -1,388 +1,172 @@
-"""
-Script to train a Reach-avoid value function.
-"""
-
-"""Launch Isaac Sim Simulator first."""
+from __future__ import annotations
 
 import argparse
+import os
+import random
+import time
+from datetime import datetime
+
+import numpy as np
+import torch
+import yaml
 
 from isaaclab.app import AppLauncher
 
-# add argparse arguments
-parser = argparse.ArgumentParser(description="Play a checkpoint of an RL agent.")
-parser.add_argument("--seed", type=int, default=None, help="Seed of RL environment")
-parser.add_argument("--video", action="store_true", default=False, help="Record videos during training.")
-parser.add_argument("--video_length", type=int, default=500, help="Length of the recorded video (in steps).")
-parser.add_argument("--video_interval", type=int, default=2000, help="Interval between video recordings (in steps).")
-parser.add_argument("--disable_fabric", type=bool, default=False, help="Disable fabric and use USD I/O operations.")
-parser.add_argument("--num_envs", type=int, default=2048, help="Number of environments to simulate.")
-parser.add_argument("--task", type=str, default="R1-fall", help="Name of the task.")
-parser.add_argument("--checkpoint", type=str, default=None, help="Path to model checkpoint.")
-parser.add_argument("--predictor_checkpoint", type=str, default=None, help="Path to fall predictor model checkpoint.")
+from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 
-parser.add_argument("--algorithm",
-                    type=str,
-                    default="MAPPO",
-                    choices=["PPO", "SAC", "TD3", "MAPPO"],
-                    help="The RL algorithm used for training the agent.")
-
-parser.add_argument("--model",
-                    type=str,
-                    default="Shared",
-                    choices=["MLP", "Shared", "Communet"],
-                    help="The NN model used for training the agent.")
-
-# append AppLauncher cli args
+parser = argparse.ArgumentParser(description="Train one-step TD safety value function.")
+parser.add_argument("--dataset", type=str, required=True, help="Path to processed HDF5 dataset.")
+parser.add_argument("--seed", type=int, default=None)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
-# always enable cameras to record video
-if args_cli.video:
-    args_cli.enable_cameras = True
 
-# launch omniverse app
-args_cli.headless = True                    # Headless mode
+args_cli.headless = True
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
-"""Rest everything follows."""
+from tasks.p02_safety_value.agent.safety import Safety
+from tasks.p02_safety_value.buffer.dataset import SafetyValueDataset
+from tasks.p02_safety_value.model.safety import SafetyCritic
 
-import gymnasium as gym
-import os
-import time
-import torch
-import copy
-import numpy as np
-import collections
-
-from torch.utils.tensorboard import SummaryWriter
+def set_seed(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
-from datetime import datetime
+def main() -> None:
+    cfg_path = os.path.abspath("src/tasks/p02_safety_value/envs/R1/R1_fall/cfg/predictor_cfg.yaml") # fixed
+    with open(cfg_path, "r", encoding="utf-8") as f:
+        pred_cfg = yaml.safe_load(f)
 
-import lib
-import tasks
+    seed = args_cli.seed if args_cli.seed is not None else pred_cfg["seed"]
+    set_seed(seed)
+    pred_cfg["agent"]["seed"] = seed
 
-from lib.utils.parse_utils import parse_env_cfg, load_cfg_from_registry
-from lib.buffer.rolloutbuffer import RolloutBuffer
-from lib.model.model_factory import ModelFactory
+    device = torch.device("cuda")
+    dataset_path = os.path.abspath(args_cli.dataset)
+    log_dir = os.path.join(os.path.dirname(dataset_path), datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
+    checkpoint_dir = os.path.join(log_dir)
+    os.makedirs(checkpoint_dir, exist_ok=True)
 
-from tasks.p02_safety_value.wrappers.safety_wrapper import SafetyEnvRecordVideo, SafetyEnvWrapper
+    with open(os.path.join(log_dir, "predictor_cfg.yaml"), "w", encoding="utf-8") as f:
+        yaml.safe_dump(pred_cfg, f, sort_keys=False)
 
-# config shortcuts
-algorithm = args_cli.algorithm.lower()
-model = args_cli.model.lower() if args_cli.model is not None else None
+    # ====================== Dataset ====================== #
+    train_dataset = SafetyValueDataset(dataset_path=dataset_path, split="train")
+    validation_dataset = SafetyValueDataset(dataset_path=dataset_path, split="validation")
+    test_dataset = SafetyValueDataset(dataset_path=dataset_path, split="test")
 
-def main():
-    """
-    main training method
-    """
+    batch_size = pred_cfg["agent"]["batch_size"]
+    generator = torch.Generator()
+    generator.manual_seed(seed)
 
-    # ============================= Config Parsing ===============================
-    # parse configuration
-    env_cfg = parse_env_cfg(
-        args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs, use_fabric=not args_cli.disable_fabric)
-    try:
-        cfg = load_cfg_from_registry(args_cli.task, f"rl_{algorithm}_cfg_entry_point")
-        pred_cfg = load_cfg_from_registry(args_cli.task, f"predictor_cfg_entry_point")
-    except ValueError as e:
-        print(e)
-        return
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, drop_last=True, num_workers=0, pin_memory=True, generator=generator)
+    validation_loader = DataLoader(validation_dataset, batch_size=batch_size, shuffle=False, drop_last=False, num_workers=0, pin_memory=True)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, drop_last=False, num_workers=0, pin_memory=True)
 
-    # specify directory for logging experiments (load checkpoint)
-    if args_cli.checkpoint is not None:
-        base_dir = os.path.dirname(os.path.abspath(args_cli.checkpoint))
-        log_dir  = os.path.join(base_dir, "Predictor")
-        log_dir  = os.path.join(log_dir, datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
-    else:
-        log_dir = None
+    num_states = train_dataset.states.shape[-1]
 
-    # ============================ Env & Wrapper Spawn ================================
+    # ====================== Model & Agent ====================== #
+    pred_model = {"critic_1": SafetyCritic(num_states=num_states, device=device),
+                  "critic_2": SafetyCritic(num_states=num_states, device=device)}
+    pred_agent = Safety(model=pred_model, device=device, cfg=pred_cfg["agent"])
 
-    # Create isaac environment
-    if args_cli.seed is not None:
-        env_cfg.seed = args_cli.seed
-        cfg["agent"]["seed"] = args_cli.seed
-        pred_cfg["agent"]["seed"] = args_cli.seed
-    else:
-        env_cfg.seed = cfg.get("seed", None)
-        cfg["agent"]["seed"] = cfg.get("seed", 42) # 42 is a default seed (equal to env)
-        pred_cfg["agent"]["seed"] = cfg.get("seed", 42) # 42 is a default seed (equal to env)
-    env_cfg.total_timesteps = cfg["train"]["timesteps"]
-    env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
+    # ====================== Training Setup ====================== #
+    total_updates = pred_cfg["train"]["timesteps"]
+    eval_threshold = pred_cfg["eval"]["threshold"]
+    CLI_interval = 500
+    eval_interval = 1000
+    checkpoint_interval = int(total_updates / 5)
 
-    # wrap for video recording
-    if args_cli.video and log_dir is not None:
-        args_cli.video_interval = int(cfg["train"]["timesteps"] / 5)
-        video_kwargs = {
-            "video_folder": os.path.join(log_dir, "videos", "train"),
-            "step_trigger": lambda step: step % args_cli.video_interval == 0,
-            "video_length": args_cli.video_length,
-            "disable_logger": True,
-        }
-        print("[INFO] Recording videos during training.")
-        env = SafetyEnvRecordVideo(env, **video_kwargs)
+    writer = SummaryWriter(log_dir=log_dir)
 
-    # Get environment (step) dt for real-time evaluation
-    try:
-        dt = env.step_dt
-    except AttributeError:
-        dt = env.unwrapped.step_dt
+    print(f"[INFO] Dataset: {dataset_path}")
+    print(f"[INFO] Train samples: {len(train_dataset)}")
+    print(f"[INFO] Validation samples: {len(validation_dataset)}")
+    print(f"[INFO] Test samples: {len(test_dataset)}")
+    print(f"[INFO] Log directory: {log_dir}")
 
-    # Wrap around environment
-    env = SafetyEnvWrapper(env)  
-
-    # Interval
-    cfg["train"]["timesteps"] = pred_cfg["train"]["timesteps"]
-    pred_train_timesteps = pred_cfg["train"]["timesteps"]
-    if cfg["agent"]["experiment"]["write_interval"] == "auto":
-        write_interval = int(cfg["train"]["timesteps"] / 100)
-    if cfg["agent"]["experiment"]["checkpoint_interval"] == "auto":
-        checkpoint_interval = int(cfg["train"]["timesteps"] / 5)
-
-    # ======================= Buffer =========================
-    multi_agent = algorithm == "mappo"
-    cfg["models"]["multi_agent"] = multi_agent
-    # Initialization
-    if cfg["buffer"]["buffer_size"] == -1:
-        cfg["buffer"]["buffer_size"] = cfg["agent"]["rollouts"]
-    else:
-        raise RuntimeError("Replaybuffer for Off-policy algorithm is not implemented yet.")
-    
-    possible_agents = None
-    if multi_agent:
-        obs_size = {}
-        state_size = {}
-        act_size = {}
-        buffers = {}
-        possible_agents = env._unwrapped.cfg.possible_agents
-        num_agent = len(possible_agents)
-        for uid in possible_agents:
-            observation_space = env.observation_space[uid]
-            action_space = env.action_space[uid]
-            if env.state_space:
-                state_space = env.state_space[uid]
-                cfg["agent"]["async_actor_critic"] = True
-            else:
-                state_space = None
-                cfg["agent"]["async_actor_critic"] = False
-            
-            buffer = RolloutBuffer(cfg["buffer"]["buffer_size"], env.num_envs, device=env.device)
-            buffer.init_buffer(observation_space, state_space, action_space)
-            buffers[uid] = buffer
-            obs_size[uid] = buffer.tensors["observations"].shape[-1]
-            state_size[uid] = buffer.tensors["states"].shape[-1] if env.state_space else obs_size[uid]
-            act_size[uid] = buffer.tensors["actions"].shape[-1]
-
-    else:
-        observation_space = env.observation_space
-        action_space = env.action_space
-        if env.state_space:
-            state_space = env.state_space
-            cfg["agent"]["async_actor_critic"] = True
-        else:
-            state_space = None
-            cfg["agent"]["async_actor_critic"] = False
-        
-        buffer = RolloutBuffer(cfg["buffer"]["buffer_size"], env.num_envs, device=env.device)
-        buffer.init_buffer(observation_space, state_space, action_space)
-        obs_size = buffer.tensors["observations"].shape[-1]
-        state_size = buffer.tensors["states"].shape[-1] if env.state_space else obs_size
-        act_size = buffer.tensors["actions"].shape[-1]
-
-    # ====================== Model Spawn  ==========================
-    # Overwrite cfg by cli argument
-    if model is not None:
-        cfg["models"]["model_type"] = model
-    
-    model_manager = ModelFactory(cfg=cfg["models"], device=env.device)
-    if model_manager.model_class == "mlp":
-        models = model_manager.generate_mlp_models(observation_size=obs_size,
-                                                   state_size=state_size,
-                                                   action_size=act_size,
-                                                   possible_agents=possible_agents)
-    else:
-        raise RuntimeError("Not supported class")
-
-    # ====================== Agent Spawn  ==========================
-    if multi_agent:
-        if model_manager.model_type == "mlp":
-            from lib.agent.mappo import MAPPO
-            agent = MAPPO(observation_space=env.observation_space,
-                          state_space=env.state_space,
-                          action_space=env.action_space,
-                          possible_agents=possible_agents,
-                          model=models,
-                          buffer=buffers,
-                          device=env.device,
-                          cfg=cfg["agent"])
-        
-        elif model_manager.model_type == "shared":
-            from lib.agent.cooperative_mappo import CooperativeMAPPO
-            agent = CooperativeMAPPO(observation_space=env.observation_space,
-                                    state_space=env.state_space,
-                                    action_space=env.action_space,
-                                    possible_agents=possible_agents,
-                                    model=models,
-                                    buffer=buffers,
-                                    device=env.device,
-                                    cfg=cfg["agent"])
-        
-        else:
-            raise RuntimeError("Unvalid model type.")
-
-    else:
-        from lib.agent.ppo import PPO
-        agent = PPO(model=models,
-                    buffer=buffer, 
-                    device=env.device,
-                    cfg=cfg["agent"])
-        
-
-    # ============= Predictor Spawn ===============
-    from tasks.p02_safety_value.buffer.replay_buffer import ReplayBuffer
-    from tasks.p02_safety_value.model.safety import SafetyCritic
-    from tasks.p02_safety_value.agent.safety import Safety
-
-    pred_buffer = ReplayBuffer(pred_cfg["buffer"]["buffer_size"], env.num_envs, device=env.device)
-    pred_buffer.init_buffer(env._unwrapped.cfg.safety_state_space)
-    pred_model = {"critic": SafetyCritic(env._unwrapped.cfg.safety_state_space, env.device)}
-    pred_agent = Safety(pred_model, pred_buffer, device=env.device, cfg=pred_cfg["agent"])
-
-    # Checkpoint (Nominal Policy)
-    if args_cli.checkpoint is not None:
-        resume_path = os.path.abspath(args_cli.checkpoint)
-        agent.load(resume_path)
-        print(f"[INFO] Get checkpoint of nominal policy from {resume_path}")
-    else:
-        resume_path = None
-        print("[INFO] Unfortunately a pre-trained nominal policy is not found for this task.")
-
-    # Checkpoint (Predictor)
-    if args_cli.predictor_checkpoint is not None:
-        resume_path_pred = os.path.abspath(args_cli.predictor_checkpoint)
-        pred_agent.load(resume_path_pred)
-        print(f"[INFO] Get predictor checkpoint from {resume_path_pred}")
-    else:
-        resume_path_pred = None
-        print(f"[INFO] No pre-trained predictor checkpoint found.")
-
-    # ======================= Training ============================
-
-    # Tensorboard Wrtier
-    if log_dir is not None: 
-        writer = SummaryWriter(log_dir=log_dir)
-    else:
-        writer = None
-    tracking_data = collections.defaultdict(list)
-    CLI_accuracy = collections.deque(maxlen=env.num_envs)
-    CLI_value_loss = collections.deque(maxlen=env.num_envs)
-
-    # Reset environment
-    obs, states, safety_states, _, _, infos = env.reset()
-    timestep = 0
+    # ====================== Training ====================== #
+    train_iterator = iter(train_loader)
     start_time = time.time()
-    
-    # Simulate environment
-    while simulation_app.is_running() and timestep <= pred_train_timesteps:
+    best_balanced_accuracy = -float("inf")
 
-        # ================== Interaction Phase =====================
-        with torch.no_grad():
-            # agent stepping (freeze and deterministic Nominal Policy)
-            actions, _, _ = agent.act(obs, infos, timestep=timestep, deterministic=True)
-            # env stepping
-            (next_obs, next_states, next_safety_states, 
-             final_obs, final_safety_states,
-             rewards, terminated, truncated, next_infos) = env.step(actions)
-            # update rollout number
-            timestep += 1
+    for update in range(1, total_updates + 1):
+        try:
+            batch = next(train_iterator)
+        except StopIteration:
+            train_iterator = iter(train_loader)
+            batch = next(train_iterator)
 
-            # Insert data to the buffer (unified interface across predictors)
-            pred_agent.insert_data(states=safety_states,
-                                   next_states=final_safety_states, # consider reset-env for truncated bootstrapping
-                                   g_values=infos["g_values"], # safety value for generating target
-                                   terminated=terminated,
-                                   truncated=truncated)
+        train_metrics = pred_agent.update(batch)
 
-        # Accuracy metrics
-        real_risk = infos["g_values"] > 0 # [E]
-        pred_risk = pred_agent.critic(safety_states)[0] > 0 # [E]
-        
-        accuracy = 100 * (torch.sum((real_risk == pred_risk).float()) / env.num_envs)
-        CLI_accuracy.append(accuracy)
-        tracking_data["Accuracy"].append(accuracy)
-
-        # Parameter update
-        if timestep >= pred_cfg["agent"]["learning_starts"]:
-            value_loss = pred_agent.update()
-            CLI_value_loss.append(value_loss)
-            tracking_data["Loss"].append(value_loss)
-
-        # =============== Logging Phase ================
-        # Tensorboard logging
-        if (timestep % write_interval == 0) and (writer is not None): 
-            for k, v in tracking_data.items():
-                if k.endswith("(min)"):
-                    writer.add_scalar(k, np.min(v), timestep)
-                elif k.endswith("(max)"):
-                    writer.add_scalar(k, np.max(v), timestep)
-                else:
-                    writer.add_scalar(k, np.mean(v), timestep)
-            # reset data containers for next iteration
-            tracking_data.clear()
-
-        # CLI Logging about the training process at each parameter update
-        if timestep % pred_buffer.buffer_size == 0:
-            per_update_value_loss = float(np.mean(CLI_value_loss)) if len(CLI_value_loss) else float("nan")
-            per_value_loss =  "-" if np.isnan(per_update_value_loss) else f"{per_update_value_loss:6.5f}"
-
-            per_accuracy = float(np.mean(CLI_accuracy)) if len(CLI_accuracy) else float ("nan")
-            per_accuracy = "-" if np.isnan(per_accuracy) else f"{per_accuracy:6.5f}"
-
+        if update % CLI_interval == 0:
             elapsed_time = time.time() - start_time
-            elapsed_time_per_step = elapsed_time / timestep if timestep > 0 else 0
-            complete_time = elapsed_time_per_step * (pred_train_timesteps - timestep)
+            for key, value in train_metrics.items():
+                writer.add_scalar(f"Train/{key}", value, update)
 
-            e_h = int(elapsed_time // 3600)
-            e_m = int((elapsed_time % 3600) // 60)
-            e_s = int(elapsed_time % 60)
+            print(
+                f"[TRAIN] update={update}/{total_updates} | "
+                f"loss={train_metrics['loss']:.6f} | "
+                f"loss_1={train_metrics['loss_1']:.6f} | "
+                f"loss_2={train_metrics['loss_2']:.6f} | "
+                f"value_mean={train_metrics['value_mean']:.4f} | "
+                f"target_mean={train_metrics['target_mean']:.4f} | "
+                f"gap={train_metrics['critic_gap']:.4f}"
+            )
 
-            c_h = int(complete_time // 3600)
-            c_m = int((complete_time % 3600) // 60)
-            c_s = int(complete_time % 60)
+        if update % eval_interval == 0:
+            eval_metrics = pred_agent.evaluate(validation_loader, threshold=eval_threshold)
 
-            content_width = 64
-            line_header = f"Step Progress {timestep} / {pred_train_timesteps}"
-            line_time_header = f"Time Progress  {e_h:02d}:{e_m:02d}:{e_s:02d}/{c_h:02d}:{c_m:02d}:{c_s:02d}"
-            line_value_loss = f"Loss        : {per_value_loss}"
-            line_accuracy = f"Accuracy      : {per_accuracy}"
+            for key, value in eval_metrics.items():
+                writer.add_scalar(f"Validation/{key}", value, update)
 
-            print(f" ________________________________________________________________")
-            print(f"|                                                                |")
-            print(f"|{line_header.center(content_width)}|")
-            print(f"|{line_time_header.center(content_width)}|")
-            print(f"|________________________________________________________________|")
-            print(f"|                                                                |")
-            print(f"| {line_value_loss:<{content_width-1}}|")
-            print(f"| {line_accuracy:<{content_width-1}}|")
-            print(f"|________________________________________________________________|")
+            print(
+                f"[EVAL] update={update}/{total_updates} | "
+                f"td_loss={eval_metrics['td_loss']:.6f} | "
+                f"gap={eval_metrics['critic_gap']:.4f} | "
+                f"DR={eval_metrics['detection_rate']:.4f} | "
+                f"FAR={eval_metrics['false_alarm_rate']:.4f} | "
+                f"BA={eval_metrics['balanced_accuracy']:.4f} | "
+                f"pred_risk={eval_metrics['pred_risk_rate']:.4f} | "
+                f"real_risk={eval_metrics['real_risk_rate']:.4f}"
+            )
 
-        # Checkpoint save
-        if (timestep % checkpoint_interval == 0) and (log_dir is not None):
-            checkpoint_pred_path = os.path.join(log_dir, f"predictor_agent_{timestep}.pt")
-            pred_agent.save(checkpoint_pred_path)
+            if eval_metrics["balanced_accuracy"] > best_balanced_accuracy:
+                best_balanced_accuracy = eval_metrics["balanced_accuracy"]
+                pred_agent.save(os.path.join(checkpoint_dir, "agent_best.pt"))
 
-        # update
-        obs = next_obs
-        states = next_states
-        safety_states = next_safety_states
-        infos = next_infos
+        if update % checkpoint_interval == 0:
+            pred_agent.save(os.path.join(checkpoint_dir, f"agent_{update}.pt"))
 
-    # close the simulator
-    env.close()
+    # ====================== Final Evaluation ====================== #
+    final_checkpoint_path = os.path.join(checkpoint_dir, "agent_final.pt")
+    pred_agent.save(final_checkpoint_path)
+
+    test_metrics = pred_agent.evaluate(test_loader, threshold=eval_threshold)
+    for key, value in test_metrics.items():
+        writer.add_scalar(f"Test/{key}", value, total_updates)
+
+    writer.close()
+
+    print(
+        f"[TEST] "
+        f"td_loss={test_metrics['td_loss']:.6f} | "
+        f"DR={test_metrics['detection_rate']:.4f} | "
+        f"FAR={test_metrics['false_alarm_rate']:.4f} | "
+        f"BA={test_metrics['balanced_accuracy']:.4f} | "
+        f"pred_risk={test_metrics['pred_risk_rate']:.4f} | "
+        f"real_risk={test_metrics['real_risk_rate']:.4f}"
+    )
+    print(f"[INFO] Training completed.")
+    print(f"[INFO] Final checkpoint: {final_checkpoint_path}")
 
 
 if __name__ == "__main__":
-    # run the main function
     main()
     # close sim app
     simulation_app.close()

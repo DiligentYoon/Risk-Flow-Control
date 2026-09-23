@@ -30,7 +30,6 @@ class SafetyEnvWrapper(IsaacLabWrapper):
         super().__init__(env)
 
         self._safety_states = None
-        self._final_observations = None
         self._final_safety_states = None
 
     @property
@@ -47,44 +46,46 @@ class SafetyEnvWrapper(IsaacLabWrapper):
 
     def step(
         self, actions: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, Any]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, Any]:
         """Perform a step in the environment."""
         actions = unflatten_tensorized_space(self.action_space, actions)
-        observations, states, safety_states, final_observations, final_safety_states, reward, terminated, truncated, self._info = self._env.step(actions)
+        (observations, states,
+         safety_states, safety_values, final_safety_states, final_safety_values, 
+         reward, terminated, truncated, final_push_event, self._info) = self._env.step(actions)
 
         self._observations = flatten_tensorized_space(tensorize_space(self.observation_space, observations))
         if states is not None:
             self._states = flatten_tensorized_space(tensorize_space(self.state_space, states))
         self._safety_states = flatten_tensorized_space(tensorize_space(self.safety_state_space, safety_states))
-        self._final_observations = flatten_tensorized_space(tensorize_space(self.observation_space, final_observations))
         self._final_safety_states = flatten_tensorized_space(tensorize_space(self.safety_state_space, final_safety_states))
 
         return (
             self._observations,
             self._states,
             self._safety_states,
-            self._final_observations,
+            safety_values.reshape(-1, 1),
             self._final_safety_states,
+            final_safety_values.reshape(-1, 1),
             reward.reshape(-1, 1),
             terminated.reshape(-1, 1),
             truncated.reshape(-1, 1),
+            final_push_event.reshape(-1, 1),
             self._info,
         )
 
-    def reset(self) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, Any]:
+    def reset(self) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Any]:
         """Reset the environment."""
         if self._reset_once:
-            observations, states, safety_states, final_observations, final_safety_states, self._info = self._env.reset()
+            observations, states, safety_states, self._info = self._env.reset()
 
             self._observations = flatten_tensorized_space(tensorize_space(self.observation_space, observations))
             if states is not None:
                 self._states = flatten_tensorized_space(tensorize_space(self.state_space, states))
             self._safety_states = flatten_tensorized_space(tensorize_space(self.safety_state_space, safety_states))
-            self._final_observations = flatten_tensorized_space(tensorize_space(self.observation_space, final_observations))
-            self._final_safety_states = flatten_tensorized_space(tensorize_space(self.safety_state_space, final_safety_states))
 
             self._reset_once = False
-        return self._observations, self._states, self._safety_states, self._final_observations, self._final_safety_states, self._info
+
+        return self._observations, self._states, self._safety_states, self._info
 
 
 class SafetyEnvRecordVideo(RecordVideo):
@@ -101,7 +102,7 @@ class SafetyEnvRecordVideo(RecordVideo):
 
     def reset(self, *, seed=None, options=None):
         """Reset the environment and eventually start a new recording."""
-        observations, states, safety_states, final_observations, final_safety_states, info = self.env.reset(seed=seed, options=options)
+        observations, states, safety_states, info = self.env.reset(seed=seed, options=options)
         self.episode_id += 1
 
         if self.recording and self.video_length == float("inf"):
@@ -114,11 +115,13 @@ class SafetyEnvRecordVideo(RecordVideo):
             if len(self.recorded_frames) > self.video_length:
                 self.stop_recording()
 
-        return observations, states, safety_states, final_observations, final_safety_states, info
+        return observations, states, safety_states, info
 
     def step(self, action):
         """Step the environment, recording a frame while :attr:`recording` is set."""
-        observations, states, safety_states, final_observations, final_safety_states, reward, terminated, truncated, info = self.env.step(action)
+        (observations, states, 
+         safety_states, safety_values, final_safety_states, final_safety_values, 
+         reward, terminated, truncated, final_push_event, info) = self.env.step(action)
         self.step_id += 1
 
         if self.step_trigger and self.step_trigger(self.step_id):
@@ -128,4 +131,4 @@ class SafetyEnvRecordVideo(RecordVideo):
             if len(self.recorded_frames) > self.video_length:
                 self.stop_recording()
 
-        return observations, states, safety_states, final_observations, final_safety_states, reward, terminated, truncated, info
+        return observations, states, safety_states, safety_values, final_safety_states, final_safety_values, reward, terminated, truncated, final_push_event, info

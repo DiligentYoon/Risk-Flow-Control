@@ -43,7 +43,7 @@ class R1BaseEnv(Env):
         )
 
         # Upper-body joints
-        self.total_arm_joint_ids, self.total_arm_joint_names = (
+        self.total_arm_joint_ids, _ = (
             self._robot.find_joints(
                 [
                     r"waist_(roll|yaw)_joint",
@@ -56,6 +56,19 @@ class R1BaseEnv(Env):
         )
 
         # Specific joint groups
+
+        # Upper-body without waist
+        self.no_waist_yaw_total_arm_joint_ids, _ = (
+            self._robot.find_joints(
+                [
+                    r"waist_roll_joint",
+                    r".*_shoulder_(pitch|roll|yaw)_joint",
+                    r".*_elbow_joint",
+                    r".*_wrist_roll_joint",
+                    r"head_(pitch|yaw)_joint",
+                ]
+            )
+        )
 
         # Hip yaw / roll
         self.hip_xz_joint_ids, _ = self._robot.find_joints(

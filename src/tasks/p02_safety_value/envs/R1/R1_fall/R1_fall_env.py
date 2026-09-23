@@ -41,14 +41,12 @@ class R1FallEnv(R1BaseEnv):
 
         self.root_pos_w = torch.zeros((self.num_envs, 3), dtype=torch.float, device=self.device)
         self.root_rot_w = torch.zeros((self.num_envs, 4), dtype=torch.float, device=self.device)
-        self.root_lin_vel_w = torch.zeros((self.num_envs, 3), dtype=torch.float, device=self.device)
         self.root_lin_vel_b = torch.zeros((self.num_envs, 3), dtype=torch.float, device=self.device)
         self.root_ang_vel_b = torch.zeros((self.num_envs, 3), dtype=torch.float, device=self.device)
         self.root_heading = torch.zeros((self.num_envs, 1), dtype=torch.float, device=self.device)
         self.projected_gravity = torch.zeros((self.num_envs, 3), dtype=torch.float, device=self.device)
         self.joint_pos = torch.zeros((self.num_envs, self._robot.num_joints), dtype=torch.float, device=self.device)
         self.joint_vel = torch.zeros((self.num_envs, self._robot.num_joints), dtype=torch.float, device=self.device)
-        self.command_inputs_b = torch.zeros((self.num_envs, 3), dtype=torch.float, device=self.device)
         self.foot_rot_w = torch.zeros((self.num_envs, 2, 4), dtype=torch.float, device=self.device)
 
         self.phase = torch.zeros(self.num_envs, device=self.device)
@@ -135,38 +133,38 @@ class R1FallEnv(R1BaseEnv):
         if self.cfg.num_agents > 1:
             observations = {
                 "arm": torch.cat([
-                    self.root_lin_vel_b,
-                    self.root_ang_vel_b,
-                    self.projected_gravity,
-                    self.command_inputs_b,
+                    self._robot.data.root_lin_vel_b,
+                    self._robot.data.root_ang_vel_b,
+                    self._robot.data.projected_gravity_b,
+                    self.commands.command_b,
                     self.phase_sin.unsqueeze(-1),
                     self.phase_cos.unsqueeze(-1),
-                    self.joint_pos[:, self.total_arm_joint_ids],
-                    self.joint_vel[:, self.total_arm_joint_ids],
+                    self._robot.data.joint_pos[:, self.total_arm_joint_ids],
+                    self._robot.data.joint_vel[:, self.total_arm_joint_ids],
                     self.prev_actions["arm"],
                 ], dim=-1),
                 "leg": torch.cat([
-                    self.root_lin_vel_b,
-                    self.root_ang_vel_b,
-                    self.projected_gravity,
-                    self.command_inputs_b,
+                    self._robot.data.root_lin_vel_b,
+                    self._robot.data.root_ang_vel_b,
+                    self._robot.data.projected_gravity_b,
+                    self.commands.command_b,
                     self.phase_sin.unsqueeze(-1),
                     self.phase_cos.unsqueeze(-1),
-                    self.joint_pos[:, self.total_leg_joint_ids],
-                    self.joint_vel[:, self.total_leg_joint_ids],
+                    self._robot.data.joint_pos[:, self.total_leg_joint_ids],
+                    self._robot.data.joint_vel[:, self.total_leg_joint_ids],
                     self.prev_actions["leg"],
                 ], dim=-1),
             }
         else:
             observations = torch.cat([
-                self.root_lin_vel_b,
-                self.root_ang_vel_b,
-                self.projected_gravity,
-                self.command_inputs_b,
+                self._robot.data.root_lin_vel_b,
+                self._robot.data.root_ang_vel_b,
+                self._robot.data.projected_gravity_b,
+                self.commands.command_b,
                 self.phase_sin.unsqueeze(-1),
                 self.phase_cos.unsqueeze(-1),
-                self.joint_pos,
-                self.joint_vel,
+                self._robot.data.joint_pos,
+                self._robot.data.joint_vel,
                 self.prev_actions,
             ], dim=-1)
 
@@ -177,15 +175,15 @@ class R1FallEnv(R1BaseEnv):
             total_joint_ids = self.total_leg_joint_ids + self.total_arm_joint_ids
 
             shared_states = torch.cat([
-                self.root_pos_w[:, 2:3],
-                self.root_lin_vel_b,
-                self.root_ang_vel_b,
-                self.projected_gravity,
-                self.command_inputs_b,
+                self._robot.data.root_pos_w[:, 2:3],
+                self._robot.data.root_lin_vel_b,
+                self._robot.data.root_ang_vel_b,
+                self._robot.data.projected_gravity_b,
+                self.commands.command_b,
                 self.phase_sin.unsqueeze(-1),
                 self.phase_cos.unsqueeze(-1),
-                self.joint_pos[:, total_joint_ids],
-                self.joint_vel[:, total_joint_ids],
+                self._robot.data.joint_pos[:, total_joint_ids],
+                self._robot.data.joint_vel[:, total_joint_ids],
                 self.prev_actions["leg"],
                 self.prev_actions["arm"],
             ], dim=-1)
@@ -200,15 +198,19 @@ class R1FallEnv(R1BaseEnv):
         return states
 
     def _get_safety_states(self):
+        return torch.cat([self._robot.data.root_lin_vel_b,
+                          self._robot.data.root_ang_vel_b,
+                          self._robot.data.projected_gravity_b,
+                          self._robot.data.joint_pos,
+                          self._robot.data.joint_vel], dim=-1)
+
+    def _get_safety_values(self):
         # safety value
-        base_tilt = (torch.atan2(torch.norm(self.projected_gravity[:, :2], dim=-1), -self.projected_gravity[:, 2]) - self.cfg.phi_max) / self.cfg.phi_max
-        base_height = (self.cfg.termination_height - self.root_pos_w[:, 2]) / self.cfg.termination_height
-        self.extras["g_values"] = torch.max(base_tilt, base_height)
-        return torch.cat([self.root_lin_vel_b,
-                          self.root_ang_vel_b,
-                          self.projected_gravity,
-                          self.joint_pos,
-                          self.joint_vel], dim=-1)
+        base_tilt = (torch.atan2(torch.norm(self._robot.data.projected_gravity_b[:, :2], dim=-1), 
+                                 -self._robot.data.projected_gravity_b[:, 2]) - self.cfg.phi_max) / self.cfg.phi_max
+        base_height = (self.cfg.termination_height - self._robot.data.root_pos_w[:, 2]) / self.cfg.termination_height
+
+        return torch.max(base_tilt, base_height)
 
     def _get_rewards(self) -> torch.Tensor:
         if self.cfg.num_agents > 1:
@@ -228,9 +230,8 @@ class R1FallEnv(R1BaseEnv):
         critical_contact_forces = torch.norm(self.contact_sensors.data.net_forces_w_history[:, :, self.denied_collision_link_ids], dim=-1)
         died_fall = self.root_pos_w[:, 2] <= self.cfg.termination_height
         died_collision = torch.any(torch.any(critical_contact_forces > 1.0, dim=-1), dim=-1)
-        died_ang = (torch.norm(self.root_ang_vel_b[:, :3], dim=-1) >= self.cfg.termination_ang_vel)
 
-        died = (died_fall & died_collision) | died_ang
+        died = died_fall & died_collision
 
         return died, time_out
 
@@ -264,7 +265,6 @@ class R1FallEnv(R1BaseEnv):
 
         self.root_pos_w[i] = self._robot.data.root_pos_w[i]
         self.root_rot_w[i] = self._robot.data.root_quat_w[i]
-        self.root_lin_vel_w[i] = self._robot.data.root_lin_vel_w[i]
         self.root_lin_vel_b[i] = self._robot.data.root_lin_vel_b[i]
         self.root_ang_vel_b[i] = self._robot.data.root_ang_vel_b[i]
 
@@ -274,8 +274,6 @@ class R1FallEnv(R1BaseEnv):
 
         self.joint_pos[i] = self._robot.data.joint_pos[i]
         self.joint_vel[i] = self._robot.data.joint_vel[i]
-
-        self.command_inputs_b[i] = self.commands.command_b[i]
 
         self.foot_rot_w[i] = self._robot.data.body_link_quat_w[i][:, self.ankle_x_link_ids]
 
@@ -312,6 +310,9 @@ class R1FallEnv(R1BaseEnv):
 
         self.phase_sin[i] = torch.sin(2 * torch.pi * self.phase[i])
         self.phase_cos[i] = torch.cos(2 * torch.pi * self.phase[i])
+
+    def _update_viz_data(self):
+        return self.extras
 
 @torch.jit.script
 def smooth_sqr_wave(phase):

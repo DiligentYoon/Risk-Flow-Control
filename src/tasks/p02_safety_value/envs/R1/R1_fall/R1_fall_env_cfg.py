@@ -4,18 +4,21 @@ from __future__ import annotations
 from isaaclab.utils import configclass
 from isaaclab.markers import VisualizationMarkersCfg
 from isaaclab.envs.common import ViewerCfg
+from isaaclab.managers import SceneEntityCfg
+from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.markers.config import BLUE_ARROW_X_MARKER_CFG, GREEN_ARROW_X_MARKER_CFG
 
 from lib.domain_randomizer.commander import UniformVelocityCommandCfg
 from lib.utils.plot_utils import CapturabilityPlotter, PNGSavePlotter
 
 from ..R1_base_env_cfg import R1BaseEnvCfg
+from .mdp.randomizer import push_and_log
 
 # Environment for training Reach-avoid network
 @configclass
 class R1FallEnvCfg(R1BaseEnvCfg):
     ## ==================== Environment parameters ==================== ##
-    episode_length_s = 10.0
+    episode_length_s = 12.0
     sim_dt = 0.005
     decimation = 4
 
@@ -40,7 +43,6 @@ class R1FallEnvCfg(R1BaseEnvCfg):
     # === safety value config === #
     safety_state_space = 61
 
-    # === RA Setting === #
     termination_height  = 0.35
     termination_ang_vel = 20.0
     phi_max = 3.14/4
@@ -56,13 +58,13 @@ class R1FallEnvCfg(R1BaseEnvCfg):
     # commander
     commands: UniformVelocityCommandCfg = UniformVelocityCommandCfg(
         asset_name="robot",
-        resampling_time_range=(4.0, 5.0),
+        resampling_time_range=(100.0, 100.0),
         prob_standing_envs=0.0,
         prob_heading_envs=0.0,
         heading_command=False,
         heading_control_stiffness=0.0,
         ranges=UniformVelocityCommandCfg.Ranges(
-            lin_vel_x=(0.0, 1.0),
+            lin_vel_x=(0.0, 2.0),
             lin_vel_y=(0.0, 0.0),
             ang_vel_z=(-1.0, 1.0),
         ),
@@ -92,15 +94,21 @@ class R1FallEnvCfg(R1BaseEnvCfg):
 
     def __post_init__(self):
         super().__post_init__()
-        self.episode_length_s = 30.0
 
-        self.events.push_robot.params["velocity_range"] = {
-            "x": (-1.5, 1.5),
-            "y": (-1.5, 1.5),
-            "roll": (-3.0, 3.0),
-            "pitch": (-3.0, 3.0),
-        }
-        self.events.push_robot.interval_range_s = (2.0, 3.0)
+        self.events.push_robot = EventTerm(
+            func=push_and_log,
+            mode="interval",
+            interval_range_s=(3.0, 3.0),
+            params={
+                "asset_cfg": SceneEntityCfg("robot", body_names="waist_yaw_link"),
+                "velocity_range": {
+                    "x": (-3.0, 3.0),
+                    "y": (-3.0, 3.0),
+                    "roll": (-2.0, 2.0),
+                    "pitch": (-2.0, 2.0),
+                }
+            }
+        )
 
 # Environment for eveluating Reach-avoid network
 @configclass
@@ -122,4 +130,6 @@ class R1FallPlayEnvCfg(R1FallEnvCfg):
 
         # ==== Viz data ==== #
         self.plotter: PNGSavePlotter = PNGSavePlotter
-        self.viz_data = {"risk_value": 0}
+        self.viz_data = {"real_risk_value": 0,
+                         "pred_risk_value": 0,
+                         "prediction_error": 0}
