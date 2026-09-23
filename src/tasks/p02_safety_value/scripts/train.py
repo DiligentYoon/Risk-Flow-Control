@@ -78,9 +78,9 @@ def main() -> None:
     # ====================== Training Setup ====================== #
     total_updates = pred_cfg["train"]["timesteps"]
     eval_threshold = pred_cfg["eval"]["threshold"]
-    CLI_interval = 500
+    CLI_interval = 100
     eval_interval = 1000
-    checkpoint_interval = int(total_updates / 5)
+    checkpoint_interval = int(total_updates / 3)
 
     writer = SummaryWriter(log_dir=log_dir)
 
@@ -93,7 +93,7 @@ def main() -> None:
     # ====================== Training ====================== #
     train_iterator = iter(train_loader)
     start_time = time.time()
-    best_balanced_accuracy = -float("inf")
+    best_accuracy = -float("inf")
 
     for update in range(1, total_updates + 1):
         try:
@@ -129,15 +129,16 @@ def main() -> None:
                 f"[EVAL] update={update}/{total_updates} | "
                 f"td_loss={eval_metrics['td_loss']:.6f} | "
                 f"gap={eval_metrics['critic_gap']:.4f} | "
+                f"RCR={eval_metrics['risk_coverage_rate']:.4f} | "
                 f"DR={eval_metrics['detection_rate']:.4f} | "
                 f"FAR={eval_metrics['false_alarm_rate']:.4f} | "
-                f"BA={eval_metrics['balanced_accuracy']:.4f} | "
+                f"Accuracy={eval_metrics['accuracy']:.4f} | "
                 f"pred_risk={eval_metrics['pred_risk_rate']:.4f} | "
                 f"real_risk={eval_metrics['real_risk_rate']:.4f}"
             )
 
-            if eval_metrics["balanced_accuracy"] > best_balanced_accuracy:
-                best_balanced_accuracy = eval_metrics["balanced_accuracy"]
+            if eval_metrics["accuracy"] > best_accuracy:
+                best_accuracy = eval_metrics["accuracy"]
                 pred_agent.save(os.path.join(checkpoint_dir, "agent_best.pt"))
 
         if update % checkpoint_interval == 0:
@@ -155,10 +156,11 @@ def main() -> None:
 
     print(
         f"[TEST] "
+        f"RCR={eval_metrics['risk_coverage_rate']:.4f} | "
         f"td_loss={test_metrics['td_loss']:.6f} | "
         f"DR={test_metrics['detection_rate']:.4f} | "
         f"FAR={test_metrics['false_alarm_rate']:.4f} | "
-        f"BA={test_metrics['balanced_accuracy']:.4f} | "
+        f"Accuracy={test_metrics['accuracy']:.4f} | "
         f"pred_risk={test_metrics['pred_risk_rate']:.4f} | "
         f"real_risk={test_metrics['real_risk_rate']:.4f}"
     )

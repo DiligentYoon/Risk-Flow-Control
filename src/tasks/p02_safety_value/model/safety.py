@@ -28,11 +28,11 @@ class SafetyCritic(Model):
 
         # optimistic initialization for self-reinforcing error propagation
         nn.init.zeros_(self.net[-1].weight)
-        nn.init.constant_(self.net[-1].bias, -1.0) # minimum of safety target value = -1
+        nn.init.constant_(self.net[-1].bias, -0.8) # minimum of safety target value = -1
 
     def forward(self, inputs: torch.Tensor, deterministic: bool = False, update_rms: bool = False):
         """
-        Forward propagation of Reach-avoid critic NN
+        Forward propagation of Safety critic NN
         
         :param inputs: State vector
         :type inputs: torch.Tensor

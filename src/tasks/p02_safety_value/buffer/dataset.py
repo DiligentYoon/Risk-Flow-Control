@@ -18,6 +18,7 @@ class SafetyValueDataset(Dataset):
         future_max_list = []
         current_indices = []
         next_indices = []
+        segment_end_flags = []
         state_offset = 0
 
         with h5py.File(self.dataset_path, "r") as file:
@@ -41,11 +42,16 @@ class SafetyValueDataset(Dataset):
                 next_indices.append(indices + 1)
                 state_offset += length
 
+                segment_end = np.zeros(length-1, dtype=np.bool_)
+                segment_end[-1] = True
+                segment_end_flags.append(segment_end)
+
         self.states = torch.from_numpy(np.concatenate(states_list, axis=0))
         self.g_values = torch.from_numpy(np.concatenate(g_values_list, axis=0))
         self.future_max_g = torch.from_numpy(np.concatenate(future_max_list, axis=0))
         self.current_indices = torch.from_numpy(np.concatenate(current_indices))
         self.next_indices = torch.from_numpy(np.concatenate(next_indices))
+        self.segment_end_flags = torch.from_numpy(np.concatenate(segment_end_flags))
 
     def __len__(self) -> int:
         return len(self.current_indices)
@@ -53,4 +59,11 @@ class SafetyValueDataset(Dataset):
     def __getitem__(self, index: int):
         current_index = self.current_indices[index]
         next_index = self.next_indices[index]
-        return self.states[current_index], self.states[next_index], self.g_values[current_index], self.future_max_g[current_index]
+        return (
+            self.states[current_index], 
+            self.states[next_index], 
+            self.g_values[current_index], 
+            self.g_values[next_index], 
+            self.future_max_g[current_index], 
+            self.segment_end_flags[index]
+        )
