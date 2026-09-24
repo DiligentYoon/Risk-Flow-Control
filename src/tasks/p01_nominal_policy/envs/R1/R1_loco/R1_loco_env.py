@@ -24,14 +24,6 @@ class R1LocoEnv(R1BaseEnv):
         self.allowed_collision_link_ids, _ = self.contact_sensors.find_bodies(self.cfg.allowed_collision_bodies)
         self.denied_collision_link_ids = [body_id for body_id in total_body_ids if body_id not in self.allowed_collision_link_ids]
 
-        self.arm_deviation_joint_ids, _ = self._robot.find_joints([
-            r".*_shoulder_(roll|pitch|yaw)_joint",
-            r".*_elbow_joint",
-            r".*_wrist_roll_joint",
-            r"head_(pitch|yaw)_joint",
-        ])
-
-        self.swing_joint_ids, _ = self._robot.find_joints([r".*_shoulder_pitch_joint"])
         self.commands = UniformNonHolonomicCommand(self.cfg.commands, self._robot, self.device)
         self.mapping_sort_ids = torch.argsort(torch.tensor(self.total_arm_joint_ids + self.total_leg_joint_ids, device=self.device))
 
@@ -142,38 +134,38 @@ class R1LocoEnv(R1BaseEnv):
         if self.cfg.num_agents > 1:
             observations = {
                 "arm": torch.cat([
-                    self.root_lin_vel_b,
-                    self.root_ang_vel_b,
-                    self.projected_gravity,
-                    self.command_inputs_b,
+                    self._robot.data.root_lin_vel_b,
+                    self._robot.data.root_ang_vel_b,
+                    self._robot.data.projected_gravity_b,
+                    self.commands.command_b,
                     self.phase_sin.unsqueeze(-1),
                     self.phase_cos.unsqueeze(-1),
-                    self.joint_pos[:, self.total_arm_joint_ids],
-                    self.joint_vel[:, self.total_arm_joint_ids],
+                    self._robot.data.joint_pos[:, self.total_arm_joint_ids],
+                    self._robot.data.joint_vel[:, self.total_arm_joint_ids],
                     self.prev_actions["arm"],
                 ], dim=-1),
                 "leg": torch.cat([
-                    self.root_lin_vel_b,
-                    self.root_ang_vel_b,
-                    self.projected_gravity,
-                    self.command_inputs_b,
+                    self._robot.data.root_lin_vel_b,
+                    self._robot.data.root_ang_vel_b,
+                    self._robot.data.projected_gravity_b,
+                    self.commands.command_b,
                     self.phase_sin.unsqueeze(-1),
                     self.phase_cos.unsqueeze(-1),
-                    self.joint_pos[:, self.total_leg_joint_ids],
-                    self.joint_vel[:, self.total_leg_joint_ids],
+                    self._robot.data.joint_pos[:, self.total_leg_joint_ids],
+                    self._robot.data.joint_vel[:, self.total_leg_joint_ids],
                     self.prev_actions["leg"],
                 ], dim=-1),
             }
         else:
             observations = torch.cat([
-                self.root_lin_vel_b,
-                self.root_ang_vel_b,
-                self.projected_gravity,
-                self.command_inputs_b,
+                self._robot.data.root_lin_vel_b,
+                self._robot.data.root_ang_vel_b,
+                self._robot.data.projected_gravity_b,
+                self.commands.command_b,
                 self.phase_sin.unsqueeze(-1),
                 self.phase_cos.unsqueeze(-1),
-                self.joint_pos,
-                self.joint_vel,
+                self._robot.data.joint_pos,
+                self._robot.data.joint_vel,
                 self.prev_actions,
             ], dim=-1)
 
@@ -184,15 +176,15 @@ class R1LocoEnv(R1BaseEnv):
             total_joint_ids = self.total_leg_joint_ids + self.total_arm_joint_ids
 
             shared_states = torch.cat([
-                self.root_pos_w[:, 2:3],
-                self.root_lin_vel_b,
-                self.root_ang_vel_b,
-                self.projected_gravity,
-                self.command_inputs_b,
+                self._robot.data.root_pos_w[:, 2:3],
+                self._robot.data.root_lin_vel_b,
+                self._robot.data.root_ang_vel_b,
+                self._robot.data.projected_gravity_b,
+                self.commands.command_b,
                 self.phase_sin.unsqueeze(-1),
                 self.phase_cos.unsqueeze(-1),
-                self.joint_pos[:, total_joint_ids],
-                self.joint_vel[:, total_joint_ids],
+                self._robot.data.joint_pos[:, total_joint_ids],
+                self._robot.data.joint_vel[:, total_joint_ids],
                 self.prev_actions["leg"],
                 self.prev_actions["arm"],
             ], dim=-1)
@@ -231,7 +223,8 @@ class R1LocoEnv(R1BaseEnv):
         support_xy_penalty = -torch.sum(support_xy, dim=-1)
 
         joint_deviation_penalty_hip_xz = -torch.sum(torch.abs(self.joint_deviations[:, self.hip_xz_joint_ids]), dim=-1)
-        joint_deviation_penalty_arm = -torch.sum(torch.abs(self.joint_deviations[:, self.total_arm_joint_ids]), dim=1)
+        joint_deviation_penalty_arm = -torch.sum(torch.abs(self.joint_deviations[:, self.deviation_arm_joint_ids]), dim=1)
+        joint_deviation_penalty_swing = -torch.sum(torch.abs(self.joint_deviations[:, self.swing_arm_joint_ids]), dim=1) * torch.exp(-torch.norm(self.root_ang_vel_b, dim=1) / 0.2)
 
         ang_vel_xy_penalty = -torch.sum(torch.square(self.root_ang_vel_b[:, :2]), dim=1)
         lin_vel_z_penalty = -torch.square(self.root_lin_vel_w[:, 2])
@@ -268,6 +261,7 @@ class R1LocoEnv(R1BaseEnv):
 
         arm_specific_rewards = (
             self.cfg.p_deviation_arm * joint_deviation_penalty_arm
+            + self.cfg.p_deviation_swing * joint_deviation_penalty_swing
             + self.cfg.p_limits * joint_limit_penalty_arm
             + self.cfg.p_joint_torque_limit * joint_torque_limit_penalty_arm
             + self.cfg.p_joint_torque * joint_torque_penalty_arm
@@ -305,6 +299,7 @@ class R1LocoEnv(R1BaseEnv):
             "Task Penalty / Common_Ang_Vel_XY": ang_vel_xy_penalty,
             "Task Penalty / Common_Lin_Vel_Z": lin_vel_z_penalty,
             "Task Penalty / Arm_Deviation": joint_deviation_penalty_arm,
+            "Task Penalty / Arm_Swing_Deviation": joint_deviation_penalty_swing,
             "Task Penalty / Arm_Joint_Limit": joint_limit_penalty_arm,
             "Task Penalty / Arm_Torque_Limit": joint_torque_limit_penalty_arm,
             "Task Penalty / Arm_Torque": joint_torque_penalty_arm,
@@ -329,9 +324,9 @@ class R1LocoEnv(R1BaseEnv):
         critical_contact_forces = torch.norm(self.contact_sensors.data.net_forces_w_history[:, :, self.denied_collision_link_ids], dim=-1)
         died_fall = self.root_pos_w[:, 2] <= self.cfg.termination_height
         died_collision = torch.any(torch.any(critical_contact_forces > 1.0, dim=-1), dim=-1)
-        died_ang = (torch.norm(self.root_ang_vel_b[:, :3], dim=-1) >= self.cfg.termination_ang_vel)
+        # died_ang = (torch.norm(self.root_ang_vel_b[:, :3], dim=-1) >= self.cfg.termination_ang_vel)
 
-        died = (died_fall & died_collision) | died_ang
+        died = (died_fall & died_collision)
 
         return died, time_out
 

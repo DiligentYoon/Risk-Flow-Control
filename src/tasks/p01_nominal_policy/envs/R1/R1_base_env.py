@@ -58,16 +58,22 @@ class R1BaseEnv(Env):
         # Specific joint groups
 
         # Upper-body without waist
-        self.no_waist_yaw_total_arm_joint_ids, _ = (
+        self.deviation_arm_joint_ids, _ = (
             self._robot.find_joints(
                 [
-                    r"waist_roll_joint",
-                    r".*_shoulder_(pitch|roll|yaw)_joint",
+                    r"waist_(roll|yaw)_joint",
+                    r".*_shoulder_(roll|yaw)_joint",
                     r".*_elbow_joint",
                     r".*_wrist_roll_joint",
                     r"head_(pitch|yaw)_joint",
                 ]
             )
+        )
+
+        self.swing_arm_joint_ids, _ = self._robot.find_joints(
+            [
+                r".*_shoulder_pitch_joint",
+            ]
         )
 
         # Hip yaw / roll
@@ -90,23 +96,6 @@ class R1BaseEnv(Env):
             [
                 r".*_ankle_pitch_joint",
                 r".*_ankle_roll_joint",
-            ]
-        )
-
-        # Hip + knee
-        self.hip_knee_all_joint_ids, _ = self._robot.find_joints(
-            [
-                r".*_hip_(pitch|roll|yaw)_joint",
-                r".*_knee_joint",
-            ]
-        )
-
-        # Physical arm joints only
-        self.arm_all_joint_ids, _ = self._robot.find_joints(
-            [
-                r".*_shoulder_(pitch|roll|yaw)_joint",
-                r".*_elbow_joint",
-                r".*_wrist_roll_joint",
             ]
         )
 
@@ -135,13 +124,6 @@ class R1BaseEnv(Env):
         self.ankle_x_link_ids, _ = self._robot.find_bodies(
             [
                 r".*_ankle_roll_link",
-            ]
-        )
-
-        # Optional head body ID.
-        self.head_link_ids, _ = self._robot.find_bodies(
-            [
-                r"head_(pitch|yaw)_link",
             ]
         )
 

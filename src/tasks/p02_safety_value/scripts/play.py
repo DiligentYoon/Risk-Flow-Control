@@ -83,22 +83,7 @@ def main() -> None:
     os.makedirs(log_dir, exist_ok=True)
 
     # ============================= Environment ============================= #
-    env = gym.make(
-        args_cli.task,
-        cfg=env_cfg,
-        render_mode="rgb_array" if args_cli.video else None,
-    )
-
-    if args_cli.video:
-        video_kwargs = {
-            "video_folder": os.path.join(log_dir, "videos"),
-            "step_trigger": lambda step: step == 0,
-            "video_length": args_cli.video_length,
-            "disable_logger": True,
-        }
-        env = SafetyEnvRecordVideo(env, **video_kwargs)
-        print("[INFO] Recording evaluation video.")
-
+    env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
     env = SafetyEnvWrapper(env)
 
     # ============================= Nominal Buffer ============================= #
@@ -303,8 +288,11 @@ def main() -> None:
                 f"[EVAL] step={timestep}/{args_cli.video_length} | "
                 f"segments={metrics['num_segments']} | "
                 f"RCR={metrics['risk_coverage_rate']:.4f} | "
-                f"DR={metrics['detection_rate']:.4f} | "
-                f"FAR={metrics['false_alarm_rate']:.4f} | "
+                f"RDR={metrics['risk_detection_rate']:.4f} | "
+                f"RFAR={metrics['risk_false_alarm_rate']:.4f} | "
+                f"Termination_DR={metrics['termination_detection_rate']:.4f} | "
+                f"Termination_FAR={metrics['termination_false_alarm_rate']:.4f} | "
+                f"PR={metrics['proactive_recall']:.4f} | "
                 f"pred_risk={metrics['pred_risk_rate']:.4f} | "
                 f"real_risk={metrics['real_risk_rate']:.4f} | "
                 f"time={elapsed_time:.1f}s"
@@ -334,12 +322,15 @@ def main() -> None:
     print("=" * 80)
     print("ONLINE SAFETY VALUE EVALUATION")
     print("=" * 80)
-    print(f"Completed segments     : {metrics['num_segments']}")
-    print(f"Risk coverage rate     : {metrics['risk_coverage_rate'] * 100:.2f}")
-    print(f"Detection rate         : {metrics['detection_rate'] * 100:.2f}%")
-    print(f"False alarm rate       : {metrics['false_alarm_rate'] * 100:.2f}%")
-    print(f"Accuracy               : {metrics['accuracy'] * 100:.2f}%")
-    print(f"[INFO] Results saved to: {result_path}")
+    print(f"Completed segments           : {metrics['num_segments']}")
+    print(f"Risk coverage rate           : {metrics['risk_coverage_rate'] * 100:.2f}% ")
+    print(f"Risk Detection rate          : {metrics['risk_detection_rate'] * 100:.2f}% ")
+    print(f"Risk False alarm rate        : {metrics['risk_false_alarm_rate'] * 100:.2f}% ")
+    print(f"Termination detection rate   : {metrics['termination_detection_rate'] * 100:.2f}% ")
+    print(f"Termination false alarm rate : {metrics['termination_false_alarm_rate'] * 100:.2f}% ")
+    print(f"Proactive recall             : {metrics['proactive_recall']* 100:.2f}% ")
+    print(f"Accuracy                     : {metrics['accuracy'] * 100:.2f}% ")
+    print(f"[INFO] Results saved to      : {result_path}")
 
     evaluator.save_timeseries_plot(step_dt=float(env._unwrapped.step_dt))
     print(f"[INFO] Rollout plot saved to: {evaluator.file_path}")
