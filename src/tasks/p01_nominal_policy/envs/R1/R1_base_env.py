@@ -57,13 +57,13 @@ class R1BaseEnv(Env):
 
         # Specific joint groups
 
-        # Upper-body without waist
+        # Upper-body without pitch
         self.deviation_arm_joint_ids, _ = (
             self._robot.find_joints(
                 [
                     r"waist_(roll|yaw)_joint",
                     r".*_shoulder_(roll|yaw)_joint",
-                    r".*_elbow_joint",
+                    # r".*_elbow_joint",
                     r".*_wrist_roll_joint",
                     r"head_(pitch|yaw)_joint",
                 ]
@@ -73,6 +73,7 @@ class R1BaseEnv(Env):
         self.swing_arm_joint_ids, _ = self._robot.find_joints(
             [
                 r".*_shoulder_pitch_joint",
+                r".*_elbow_joint",
             ]
         )
 

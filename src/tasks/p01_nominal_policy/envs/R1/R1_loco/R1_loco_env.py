@@ -224,10 +224,10 @@ class R1LocoEnv(R1BaseEnv):
 
         joint_deviation_penalty_hip_xz = -torch.sum(torch.abs(self.joint_deviations[:, self.hip_xz_joint_ids]), dim=-1)
         joint_deviation_penalty_arm = -torch.sum(torch.abs(self.joint_deviations[:, self.deviation_arm_joint_ids]), dim=1)
-        joint_deviation_penalty_swing = -torch.sum(torch.abs(self.joint_deviations[:, self.swing_arm_joint_ids]), dim=1) * torch.exp(-torch.norm(self.root_ang_vel_b, dim=1) / 0.2)
+        joint_deviation_penalty_swing = -torch.sum(torch.abs(self.joint_deviations[:, self.swing_arm_joint_ids]), dim=1) * torch.exp(-torch.norm(self.root_ang_vel_b, dim=1) / 0.5)
 
         ang_vel_xy_penalty = -torch.sum(torch.square(self.root_ang_vel_b[:, :2]), dim=1)
-        lin_vel_z_penalty = -torch.square(self.root_lin_vel_w[:, 2])
+        lin_vel_z_penalty = -torch.abs(self.root_lin_vel_w[:, 2])
 
         joint_limit_penalty_leg = -torch.sum(self.out_of_limits_joint[:, self.total_leg_joint_ids], dim=1)
         joint_torque_limit_penalty_leg = -torch.sum(self.out_of_limits_torque[:, self.total_leg_joint_ids], dim=1)

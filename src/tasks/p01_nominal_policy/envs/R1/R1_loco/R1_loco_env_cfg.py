@@ -45,10 +45,10 @@ class R1LocoEnvCfg(R1BaseEnvCfg):
     p_ang_vel_xy: float = 0.2
     p_joint_torque: float = 1.0e-7
     p_joint_torque_limit: float = 1.0e-5
-    p_joint_vel: float = 3.0e-4
+    p_joint_vel: float = 1.0e-4
 
     p_limits: float = 10.0
-    p_deviation_swing: float = 3.0
+    p_deviation_swing: float = 2.0
     p_deviation_hip: float = 2.0
     p_deviation_arm: float = 2.0
     p_action_rate: float = 1.0e-3
@@ -61,7 +61,7 @@ class R1LocoEnvCfg(R1BaseEnvCfg):
     target_height = 0.73
 
     # ===== Gait guidance ===== #
-    time_period = 0.4
+    time_period = 0.45
 
     ## ============== Self collision =============== ##
     allowed_collision_bodies = [
