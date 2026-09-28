@@ -113,13 +113,14 @@ class R1LocoEnvCfg(R1BaseEnvCfg):
 
         self.robot.spawn.articulation_props.enabled_self_collisions = True
 
-        self.events.push_robot.interval_range_s = (4.0, 5.0)
-        self.events.push_robot.params["velocity_range"] = {
-            "x": (-0.5, 0.5),
-            "y": (-0.5, 0.5),
-            "roll": (-1.0, 1.0),
-            "pitch": (-1.0, 1.0),
-        }
+        self.events.push_robot = None
+        # self.events.push_robot.interval_range_s = (4.0, 5.0)
+        # self.events.push_robot.params["velocity_range"] = {
+        #     "x": (-0.5, 0.5),
+        #     "y": (-0.5, 0.5),
+        #     "roll": (-1.0, 1.0),
+        #     "pitch": (-1.0, 1.0),
+        # }
 
 
 @configclass
@@ -137,9 +138,9 @@ class R1LocoPlayEnvCfg(R1LocoEnvCfg):
 
         self.scene.num_envs = 1
 
-        self.events.push_robot.params["velocity_range"] = {
-            "x": (-0.5, 0.5),
-            "y": (-0.5, 0.5),
-            "roll": (-1.0, 1.0),
-            "pitch": (-1.0, 1.0),
-        }
+        # self.events.push_robot.params["velocity_range"] = {
+        #     "x": (-0.5, 0.5),
+        #     "y": (-0.5, 0.5),
+        #     "roll": (-1.0, 1.0),
+        #     "pitch": (-1.0, 1.0),
+        # }
