@@ -3,23 +3,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Networks of the Risk-Flow actor-critic.
-
-Three pieces:
-
-* :class:`MultiHorizonCritic` -- ``D_phi(s, a) -> [D_1, ..., D_H]``, the predicted risk flow over
-  every horizon up to the recovery deadline ``H``.
-* :class:`DeterministicActor` -- ``pi_theta(o) -> a``, raw output, neither squashed nor clipped.
-* :class:`LagrangeMultiplier` -- the primal-dual multiplier of the terminal recovery constraint.
-
-The frozen safety value ``V_N`` is not defined here. It is restored with the very structure it was
-trained under -- ``RA_Critic`` held by a ``ReachAvoid`` agent, loaded through ``agent.load()`` --
-so that nothing about the network can differ between training and inference.
-
-Unlike the submodule's models these forward methods return a single tensor rather than the
-``(value, log_prob, mean)`` triple: there is no stochastic policy here, and the critic's output is
-already a vector over horizons, so the extra slots would only be ``None``.
-"""
+"""Networks of the Risk-Flow actor-critic."""
 
 from __future__ import annotations
 
@@ -45,18 +29,6 @@ class MultiHorizonCritic(Model):
     ``D_0 = 0`` holds by definition and is a constant, not a network output, so the head count is
     exactly ``H``.
 
-    The last layer is initialized with a small orthogonal gain: the one-step TD target of head ``h``
-    is built from head ``h-1``, so a large initial output at the far heads is propagated backwards
-    through the whole horizon before it decays.
-
-    Args:
-        num_states: Dimension of the constraint state ``s`` (the frozen networks' input).
-        num_actions: Dimension of the action.
-        horizon: Recovery deadline ``H``, i.e. the number of heads. Read this from the environment
-            as ``env.max_episode_length - 1``; the episode is one step shorter than the configured
-            length, and a head that no episode ever reaches is never trained.
-        device: Device the model lives on.
-        output_gain: Orthogonal gain of the output layer.
     """
 
     def __init__(
@@ -75,8 +47,6 @@ class MultiHorizonCritic(Model):
         self.horizon = horizon
         self.num_inputs = num_states + num_actions
 
-        # Running mean, standard deviation standardizer over concat(s, a).
-        # Trained alongside the critic, and unrelated to the frozen V_N's own statistics.
         self.critic_standardizer = RunningMeanStd(shape=self.num_inputs, device=device)
 
         # Backbone

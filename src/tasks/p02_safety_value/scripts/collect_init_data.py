@@ -52,14 +52,12 @@ import torch
 
 import lib
 
-from wrapper.isaaclab_wrapper import IsaacLabWrapper
-from wrapper.record_wrapper import RecordVideo
 from lib.utils.parse_utils import parse_env_cfg, load_cfg_from_registry
 from lib.buffer.rolloutbuffer import RolloutBuffer
 from lib.model.model_factory import ModelFactory
 
-from tasks.p02_safety_value.buffer.risk_classified_buffer import RiskClassifiedBuffer
-from tasks.p02_safety_value.wrappers.safety_wrapper import SafetyEnvWrapper, SafetyEnvRecordVideo
+from tasks.p02_safety_value.buffer.risk_buffer import RiskBuffer
+from tasks.p02_safety_value.wrappers.safety_wrapper import SafetyEnvWrapper
 
 algorithm = args_cli.algorithm.lower()
 model = args_cli.model.lower() if args_cli.model is not None else None
@@ -78,37 +76,10 @@ def extract_physical_snapshot(info) -> dict[str, torch.Tensor]:
         "prev_action":       info["prev_action"].clone(),
     }
 
-
-def build_valid_mask(skip_remaining: torch.Tensor,
-                     terminated: torch.Tensor,
-                     stride_counter: torch.Tensor,
-                     stride: int) -> torch.Tensor:
-    """Per-env mask combining warmup-skip, terminated exclusion, subsample stride."""
-    not_warmup = (skip_remaining == 0)
-    not_terminated = ~terminated.flatten().bool()
-    on_stride = (stride_counter % stride == 0)
-    return not_warmup & not_terminated & on_stride
-
-
-def update_counters(skip_remaining: torch.Tensor,
-                    stride_counter: torch.Tensor,
-                    done: torch.Tensor,
-                    reset_value: int) -> None:
-    """Advance per-env counters for next step.
-
-    - Decrement warmup-skip while > 0.
-    - Reset both counters for envs that just finished an episode.
-    - Increment stride counter for next step.
-    """
-    pos = skip_remaining > 0
-    skip_remaining[pos] -= 1
-
-    done_flat = done.flatten().bool()
-    skip_remaining[done_flat] = reset_value
-    stride_counter[done_flat] = 0
-
-    stride_counter += 1
-
+def update_risk_streak(risk_streak: torch.Tensor, risk_values: torch.Tensor, threshold: float) -> torch.Tensor:
+    risky = risk_values > threshold
+    risk_streak[:] = torch.where(risky, risk_streak + 1, torch.zeros_like(risk_streak))
+    return risk_streak
 
 def print_progress_box(fill_status, timestep, max_timestep, elapsed_sec, eta_sec):
     content_width = 64
@@ -122,12 +93,10 @@ def print_progress_box(fill_status, timestep, max_timestep, elapsed_sec, eta_sec
     print(f"|{line_time.center(content_width)}|")
     print("|________________________________________________________________|")
     print("|                                                                |")
-    for b in ("low", "mid", "high"):
-        cur, cap = fill_status[b]
-        ratio = 100.0 * cur / max(cap, 1)
-        tag = "FULL" if cur >= cap else f"{ratio:5.1f}%"
-        line = f"{b.capitalize():4s} : {cur:>7d} / {cap:<7d}  ({tag})"
-        print(f"| {line:<{content_width-1}}|")
+    cur, cap = fill_status
+    ratio = 100.0 * cur / max(cap, 1)
+    tag = "FULL" if cur >= cap else f"{ratio:5.1f}%"
+    print(f"[Collection] {cur}/{cap} ({tag}) | Step {timestep}/{max_timestep} | ETA {eta_sec:.0f}s")
     print("|________________________________________________________________|")
 
 
@@ -305,22 +274,20 @@ def main():
 
     # ============= Risk-classified buffer ===============
     joint_dim = env._unwrapped._robot.num_joints
-    risk_buffer = RiskClassifiedBuffer(
-        capacity_per_bucket=int(collection_cfg["capacity_per_bucket"]),
-        thresholds=(float(collection_cfg["thresholds"]["low_high"]),
-                    float(collection_cfg["thresholds"]["mid_high"])),
+    risk_buffer = RiskBuffer(
+        capacity=int(collection_cfg["capacity"]),
         joint_dim=joint_dim,
         device=env.device,
     )
 
     # ============= Collection loop ===============
-    warmup_skip = int(collection_cfg.get("warmup_skip_steps", 4))
-    subsample_stride = max(1, int(collection_cfg.get("subsample_stride", 1)))
     max_timestep = int(collection_cfg["max_timestep"])
     log_interval = 500
-
-    skip_remaining = torch.full((env.num_envs,), warmup_skip, dtype=torch.long, device=env.device)
-    stride_counter = torch.zeros((env.num_envs,), dtype=torch.long, device=env.device)
+    persistent_steps = int(collection_cfg.get("persistent_risk_steps", 10))
+    risk_threshold = float(collection_cfg.get("risk_threshold", 0.0))
+    
+    risk_streak = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
+    collected = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
 
     obs, states, safety_states, infos = env.reset()
 
@@ -328,6 +295,14 @@ def main():
     t_start = time.time()
     while simulation_app.is_running() and timestep < max_timestep:
         with torch.no_grad():
+            pred_values = pred_agent.predict(safety_states).squeeze(-1)
+            snapshot = extract_physical_snapshot(infos["collection"])
+
+            risk_streak = update_risk_streak(risk_streak, pred_values, risk_threshold)
+            persistent_mask = (risk_streak == persistent_steps) & ~collected # 최초감지 state에 대해 저장 & 에피소드당 최대 1개
+            risk_buffer.add(snapshot=snapshot, risk_scores=pred_values, mask=persistent_mask)
+            collected[persistent_mask] = True
+
             actions, _, _ = agent.act(obs, infos, timestep=timestep, deterministic=True)
 
             (
@@ -344,15 +319,11 @@ def main():
                 next_infos,
             ) = env.step(actions)
 
-            pred_values = pred_agent.predict(final_safety_states).squeeze(-1)
-            snapshot = extract_physical_snapshot(infos["collection"])
-
-        valid_mask = build_valid_mask(skip_remaining, terminated, stride_counter, subsample_stride)
-        risk_buffer.add(snapshot=snapshot, risk_scores=pred_values, valid_mask=valid_mask)
-        update_counters(skip_remaining, stride_counter, done=(terminated | truncated), reset_value=warmup_skip)
+            done = (terminated | truncated).flatten().bool()
+            risk_streak[done] = 0
+            collected[done] = False
 
         timestep += 1
-
         obs = next_obs
         states = next_states
         safety_states = next_safety_states
@@ -371,15 +342,6 @@ def main():
     # ============= Save & summary ===============
     risk_buffer.save(save_dir)
     print(f"[INFO] Saved risk-classified buckets to {save_dir}")
-
-    final = risk_buffer.fill_status()
-    underfilled = risk_buffer.underfilled_buckets()
-    print("[SUMMARY]")
-    for b in ("low", "mid", "high"):
-        cur, cap = final[b]
-        print(f"  {b:4s} : {cur} / {cap}")
-    if underfilled:
-        print(f"[WARN] underfilled buckets: {underfilled}")
 
     env.close()
 

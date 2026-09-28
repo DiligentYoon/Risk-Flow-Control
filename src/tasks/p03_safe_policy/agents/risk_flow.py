@@ -36,9 +36,9 @@ class RiskFlow(Agent):
 
     Args:
         model: ``{"critic": MultiHorizonCritic, "actor": DeterministicActor}``. The frozen value
-            network is deliberately *not* a member of this dictionary -- see ``value_critic``.
+            network is deliberately *not* a member of this dictionary -- see ``safety_value``.
         buffer: Replay buffer. Only required for training.
-        value_critic: The frozen ``V_N``, i.e. the ``critic`` of a :class:`ReachAvoid` agent that
+        safety_value: The frozen ``V_N``, i.e. the ``critic`` of a :class:`ReachAvoid` agent that
             was built and loaded exactly as it was during its own training.
         torque_model: Constants of the analytic PD torque surrogate, as published by task env.
         device: Device on which tensors are allocated.
@@ -49,7 +49,7 @@ class RiskFlow(Agent):
         self,
         model: Dict[str, nn.Module],
         buffer: Optional[RiskFlowBuffer],
-        value_critic: nn.Module,
+        safety_value: nn.Module,
         torque_model: Dict[str, Any],
         device: Union[str, torch.device],
         cfg: Dict,
@@ -61,7 +61,7 @@ class RiskFlow(Agent):
         self.actor = self.model["actor"].to(self.device)
 
         # Frozen V_N. This agent is only allowed to read it.
-        self.value_critic = value_critic
+        self.safety_value = safety_value
 
         # Buffer
         self.buffer = buffer
@@ -234,8 +234,8 @@ class RiskFlow(Agent):
         """
         # Delta_N is recomputed from the stored states rather than read back from the buffer:
         # storing it would pin every sample to one particular V_N.
-        value, _, _ = self.value_critic(constraint_states)
-        next_value, _, _ = self.value_critic(final_constraint_states)
+        value, _, _ = self.safety_value(constraint_states)
+        next_value, _, _ = self.safety_value(final_constraint_states)
         delta = next_value - value
 
         next_actions = self.target_actor(final_observations)
@@ -388,7 +388,7 @@ class RiskFlow(Agent):
             # g = V_N(s) + D_H - delta_N, the predicted terminal risk against its budget. V_N(s)
             # does not depend on the action, so it shifts g without contributing any gradient.
             with torch.no_grad():
-                value, _, _ = self.value_critic(constraint_states)
+                value, _, _ = self.safety_value(constraint_states)
             violation = value.squeeze(-1) + flow[:, -1] - self.terminal_risk_threshold
             objective = objective + self.lagrange().detach() * violation
 

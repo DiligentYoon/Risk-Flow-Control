@@ -1,0 +1,97 @@
+# Reference (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
+# All rights reserved.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
+from __future__ import annotations
+
+import isaaclab.sim as sim_utils
+from isaaclab.assets import ArticulationCfg
+from isaaclab.scene import InteractiveSceneCfg
+from isaaclab.sim import SimulationCfg
+from isaaclab.terrains import TerrainImporterCfg
+from isaaclab.sensors import ContactSensorCfg
+from isaaclab.utils import configclass
+
+from isaaclab.managers import EventTermCfg as EventTerm
+from isaaclab.managers import SceneEntityCfg
+from isaaclab.markers import VisualizationMarkersCfg
+from isaaclab.markers.config import FRAME_MARKER_CFG
+
+from assets.robots.R1.R1 import R1_CFG
+
+from lib.domain_randomizer import randomizer
+
+from ..mdp.randomizer import reset_state_from_dataset
+from ..intervention_env_cfg import InterventionEnvCfg
+
+
+@configclass
+class EventCfg:
+    """Configuration for events."""
+    # Reset
+    reset_base = EventTerm(
+        func=reset_state_from_dataset,
+        mode="reset",
+        params={
+            "dataset_dir": "",
+            "asset_cfg": SceneEntityCfg("robot"),
+        },
+    )
+
+    reset_robot_joints = EventTerm(
+        func=randomizer.reset_joints_by_scale,
+        mode="reset",
+        params={
+            "position_range": (1.0, 1.0),
+            "velocity_range": (0.0, 0.0),
+        },
+    )
+
+
+@configclass
+class R1BaseEnvCfg(InterventionEnvCfg):
+    # Environment
+    episode_length_s = 20.0
+    action_scale_factor = 1.0
+    sim_dt = 0.005
+    decimation = 4
+    action_space = 0
+    observation_space = 0
+    state_space = 0
+    safety_state_space = 0
+    soft_torque_limit = 0.8
+
+    # Simulation
+    sim: SimulationCfg = SimulationCfg(dt=sim_dt, render_interval=decimation)
+
+    # Terrain
+    terrain = TerrainImporterCfg(
+        prim_path="/World/ground",
+        terrain_type="plane",
+        env_spacing=3.0,
+        physics_material=sim_utils.RigidBodyMaterialCfg(
+            friction_combine_mode="average",
+            restitution_combine_mode="average",
+            static_friction=1.0,
+            dynamic_friction=1.0,
+            restitution=0.0,
+        ),
+        debug_vis=False,
+    )
+
+    # Events
+    events: EventCfg = EventCfg()
+
+    # Scene
+    scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=4096, env_spacing=3.0, replicate_physics=True)
+
+    # Contact sensor
+    contact_forces = ContactSensorCfg(prim_path="/World/envs/env_.*/Robot/.*", update_period=sim_dt, history_length=3, track_air_time=True)
+
+    # Robot
+    robot: ArticulationCfg = R1_CFG.replace(prim_path="/World/envs/env_.*/Robot")
+
+    # Visualization
+    torso_rotation_visualizer_cfg: VisualizationMarkersCfg = (FRAME_MARKER_CFG.replace(prim_path="/Visuals/Torso_rotation"))
+    torso_rotation_visualizer_cfg.markers["frame"].scale = (0.2, 0.2, 0.2)
