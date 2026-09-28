@@ -27,30 +27,18 @@ import torch.nn.functional as F
 
 from lib.agent.agent import Agent
 
-from buffer.risk_flow_buffer import RiskFlowBuffer
-from models.risk_flow_models import LagrangeMultiplier
+from ..buffer.risk_flow_buffer import RiskFlowBuffer
+from ..models.risk_flow_models import LagrangeMultiplier
 
 
 class RiskFlow(Agent):
-    """Learns ``D_phi(s, a)``, the flow of the frozen safety value over every horizon up to ``H``.
-
-    Args:
-        model: ``{"critic": MultiHorizonCritic, "actor": DeterministicActor}``. The frozen value
-            network is deliberately *not* a member of this dictionary -- see ``safety_value``.
-        buffer: Replay buffer. Only required for training.
-        safety_value: The frozen ``V_N``, i.e. the ``critic`` of a :class:`ReachAvoid` agent that
-            was built and loaded exactly as it was during its own training.
-        torque_model: Constants of the analytic PD torque surrogate, as published by task env.
-        device: Device on which tensors are allocated.
-        cfg: Configuration dictionary.
-    """
+    """Learns ``D_phi(s, a)``, the flow of the frozen safety value over every horizon up to ``H``."""
 
     def __init__(
         self,
         model: Dict[str, nn.Module],
         buffer: Optional[RiskFlowBuffer],
         safety_value: nn.Module,
-        torque_model: Dict[str, Any],
         device: Union[str, torch.device],
         cfg: Dict,
     ) -> None:
@@ -78,22 +66,10 @@ class RiskFlow(Agent):
         self.exploration_sigma = self.cfg["exploration_sigma"]
         self.critic_learning_rate = self.cfg["critic_learning_rate"]
         self.actor_learning_rate = self.cfg["actor_learning_rate"]
-        self.control_cost_scale = self.cfg["control_cost_scale"]
         self.dual_learning_rate = self.cfg["dual_learning_rate"]
         self.terminal_risk_threshold = self.cfg["terminal_risk_threshold"]
         self.update_actor = self.cfg["update_actor"]
         self.update_dual = self.cfg["update_dual"]
-
-        # Analytic PD torque surrogate. 
-        # The environment publishes the gains and the offsets of `q - q_default` / `q_dot` inside the constraint state, 
-        # so the cost is a differentiable function of the action with no extra stored channel.
-        self.action_scale = torque_model["action_scale"]
-        self.joint_stiffness = torque_model["stiffness"].to(self.device).unsqueeze(0)
-        self.joint_damping = torque_model["damping"].to(self.device).unsqueeze(0)
-        self.joint_pos_slice = slice(torque_model["joint_pos_id"],
-                                     torque_model["joint_pos_id"] + self.critic.num_actions)
-        self.joint_vel_slice = slice(torque_model["joint_pos_id"] + self.critic.num_actions,
-                                     torque_model["joint_pos_id"] + self.critic.num_actions + self.critic.num_actions)
 
         if self.critic.horizon != self.horizon:
             raise ValueError(
@@ -123,7 +99,6 @@ class RiskFlow(Agent):
         self.checkpoint_modules["target_actor"] = self.target_actor
 
         # Primal-dual multiplier. 
-        # it carries how tight the constraint has turned out to be, which costs thousands of steps to rediscover.
         self.lagrange = LagrangeMultiplier(self.cfg["lagrange_init"], device=self.device)
         self.dual_optimizer = torch.optim.Adam(self.lagrange.parameters(), lr=self.dual_learning_rate)
         self.checkpoint_modules["lagrange"] = self.lagrange
@@ -133,15 +108,14 @@ class RiskFlow(Agent):
 
         self.tensors_names = [
             "observations",
-            "constraint_states",
+            "safety_states",
             "actions",
             "final_observations",
-            "final_constraint_states",
+            "final_safety_states",
             "terminated",
             "truncated",
         ]
 
-        # Default Mode : Evaluation for disconnecting gradient flow
         self.set_running_mode("eval")
 
     def act(self, observations: torch.Tensor, deterministic: bool = False) -> torch.Tensor:
@@ -169,10 +143,10 @@ class RiskFlow(Agent):
     def insert_data(
         self,
         observations: torch.Tensor,
-        constraint_states: torch.Tensor,
+        safety_states: torch.Tensor,
         actions: torch.Tensor,
         final_observations: torch.Tensor,
-        final_constraint_states: torch.Tensor,
+        final_safety_states: torch.Tensor,
         terminated: torch.Tensor,
         truncated: torch.Tensor,
     ) -> None:
@@ -184,10 +158,10 @@ class RiskFlow(Agent):
         """
         self.buffer.add_samples(
             observations=observations,
-            constraint_states=constraint_states,
+            safety_states=safety_states,
             actions=actions,
             final_observations=final_observations,
-            final_constraint_states=final_constraint_states,
+            final_safety_states=final_safety_states,
             terminated=terminated,
             truncated=truncated,
         )
@@ -199,8 +173,8 @@ class RiskFlow(Agent):
     @torch.no_grad()
     def compute_target(
         self,
-        constraint_states: torch.Tensor,
-        final_constraint_states: torch.Tensor,
+        safety_states: torch.Tensor,
+        final_safety_states: torch.Tensor,
         final_observations: torch.Tensor,
         terminated: torch.Tensor,
     ) -> torch.Tensor:
@@ -215,31 +189,16 @@ class RiskFlow(Agent):
         The shift by one head is the whole content of the update: head ``h`` is supervised by head
         ``h - 1`` of the next state, which is why an off-by-one here stays invisible in the loss
         curve -- the recursion would simply be consistent with a different quantity.
-
-        ``m = (~terminated)`` cuts the bootstrap on a fall, encoding the assumption that risk stays
-        at its maximum afterwards. A time-out is *not* masked: the snapshot preserved the true next
-        state, so there is a real state to bootstrap from.
-
-        The bootstrap reads the *target* critic, not the online one, so that the regression target
-        of this batch does not move with the update that this batch produces.
-
-        Args:
-            constraint_states: ``s_t``, shape (batch, constraint_state_dim).
-            final_constraint_states: ``s_{t+1}`` before the autoreset, same shape.
-            final_observations: ``o_{t+1}`` before the autoreset, shape (batch, observation_dim).
-            terminated: Termination flags, shape (batch, 1).
-
-        Returns:
-            Targets, shape (batch, horizon).
+        
         """
         # Delta_N is recomputed from the stored states rather than read back from the buffer:
         # storing it would pin every sample to one particular V_N.
-        value, _, _ = self.safety_value(constraint_states)
-        next_value, _, _ = self.safety_value(final_constraint_states)
+        value, _, _ = self.safety_value(safety_states)
+        next_value, _, _ = self.safety_value(final_safety_states)
         delta = next_value - value
 
         next_actions = self.target_actor(final_observations)
-        next_flow = self.target_critic(final_constraint_states, next_actions) # [B, H]
+        next_flow = self.target_critic(final_safety_states, next_actions) # [B, H]
 
         mask = (~terminated).to(dtype=next_flow.dtype) # Assumption : risk stays at its maximum after failure.
 
@@ -249,43 +208,6 @@ class RiskFlow(Agent):
         target[:, 1:] = delta + mask * next_flow[:, :-1] # [B, H-1] + [B, 1] x [B, H-1]
 
         return target
-
-    def torque(self, constraint_states: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
-        """Analytic PD torque of an action, differentiable in that action.
-
-        The action is a joint-position offset on top of the default pose and the low-level
-        controller is PD, so::
-
-            target = q_default + action_scale * a
-            tau    = Kp * (target - q) - Kd * q_dot
-                   = Kp * (action_scale * a - (q - q_default)) - Kd * q_dot
-
-        The environment's own control-effort penalty cannot be used in its place for two reasons.
-        It is a float the simulator already produced, so there is no graph to differentiate; and it
-        describes the action that was *executed*, whereas the actor loss needs the cost of the
-        action the current policy would take now in that replayed state. Those are different
-        actions.
-
-        Args:
-            constraint_states: ``s``, carrying ``q - q_default`` and ``q_dot`` as channels.
-            actions: Actions to price, shape (batch, num_actions).
-
-        Returns:
-            Joint torques, shape (batch, num_actions).
-        """
-        joint_pos_error = self.action_scale * actions - constraint_states[:, self.joint_pos_slice]
-
-        return self.joint_stiffness * joint_pos_error - self.joint_damping * constraint_states[:, self.joint_vel_slice]
-
-    def control_cost(self, constraint_states: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
-        """Mean squared PD torque, per sample.
-
-        This is what keeps the raw, unsquashed actions bounded. It penalizes a physically
-        meaningful quantity rather than enforcing an interval, so it carries more information than
-        clipping and its gradient does not vanish anywhere. ``||a||^2`` is the special case of this
-        expression at ``q - q_default = q_dot = 0``, which is why it is not a separate term.
-        """
-        return self.torque(constraint_states, actions).pow(2).mean(dim=-1)
 
     @torch.no_grad()
     def update_target(self) -> None:
@@ -320,17 +242,17 @@ class RiskFlow(Agent):
 
         (
             observations,
-            constraint_states,
+            safety_states,
             actions,
             final_observations,
-            final_constraint_states,
+            final_safety_states,
             terminated,
             truncated,
         ) = self.buffer.sample_batch(self.tensors_names, self.batch_size)
 
         # Update Critic Network
-        target = self.compute_target(constraint_states, final_constraint_states, final_observations, terminated)
-        flow = self.critic(constraint_states, actions, update_rms=True)
+        target = self.compute_target(safety_states, final_safety_states, final_observations, terminated)
+        flow = self.critic(safety_states, actions, update_rms=True)
         critic_loss = F.mse_loss(flow, target)
 
         self.critic_optimizer.zero_grad()
@@ -341,7 +263,7 @@ class RiskFlow(Agent):
 
         # Update Actor Network and Dual Parameter.
         if self.update_actor:
-            actor_info, violation = self._update_actor(observations, constraint_states)
+            actor_info, violation = self._update_actor(observations, safety_states)
             dual_info = self._update_dual(violation) if violation is not None else {}
 
         self.update_target()
@@ -359,7 +281,7 @@ class RiskFlow(Agent):
             return {"critic_loss": critic_loss.item(),
                     "per_head_loss": per_head_loss}
 
-    def _update_actor(self, observations: torch.Tensor, constraint_states: torch.Tensor) -> Dict[str, Any]:
+    def _update_actor(self, observations: torch.Tensor, safety_states: torch.Tensor) -> Dict[str, Any]:
         """Run one actor update.
 
         Minimizes the mean predicted risk flow plus the control cost::
@@ -378,17 +300,14 @@ class RiskFlow(Agent):
         actions = self.actor(observations, update_rms=True)
 
         with self.critic.frozen():
-            flow = self.critic(constraint_states, actions)
+            flow = self.critic(safety_states, actions)
 
-        control_cost = self.control_cost(constraint_states, actions)
-        objective = flow.mean(dim=1) + self.control_cost_scale * control_cost
+        objective = flow.mean(dim=1)
 
         violation = None
         if self.update_dual:
-            # g = V_N(s) + D_H - delta_N, the predicted terminal risk against its budget. V_N(s)
-            # does not depend on the action, so it shifts g without contributing any gradient.
             with torch.no_grad():
-                value, _, _ = self.safety_value(constraint_states)
+                value, _, _ = self.safety_value(safety_states)
             violation = value.squeeze(-1) + flow[:, -1] - self.terminal_risk_threshold
             objective = objective + self.lagrange().detach() * violation
 
@@ -402,7 +321,6 @@ class RiskFlow(Agent):
 
         info = {
             "actor_loss": actor_loss.item(),
-            "control_cost": control_cost.mean().item(),
             "flow_mean": flow.mean().item(),
         }
 

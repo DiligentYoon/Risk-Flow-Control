@@ -34,7 +34,7 @@ class EventCfg:
         func=reset_state_from_dataset,
         mode="reset",
         params={
-            "dataset_dir": "",
+            "dataset_path": "",
             "asset_cfg": SceneEntityCfg("robot"),
         },
     )

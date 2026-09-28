@@ -15,8 +15,8 @@ parser.add_argument("--seed", type=int, default=None, help="Seed of RL environme
 parser.add_argument("--video", action="store_true", default=False, help="Record videos during collection.")
 parser.add_argument("--video_length", type=int, default=500, help="Length of the recorded video (in steps).")
 parser.add_argument("--disable_fabric", type=bool, default=False, help="Disable fabric and use USD I/O operations.")
-parser.add_argument("--num_envs", type=int, default=2048, help="Number of environments (overrides cfg default if given).")
-parser.add_argument("--task", type=str, default="R1-collect", help="Name of the task.")
+parser.add_argument("--num_envs", type=int, default=4096, help="Number of environments (overrides cfg default if given).")
+parser.add_argument("--task", type=str, default="R1-fall", help="Name of the task.")
 parser.add_argument("--checkpoint", type=str, required=True, help="Path to nominal policy checkpoint.")
 parser.add_argument("--predictor_checkpoint", type=str, required=True, help="Path to trained Reach-Avoid value checkpoint.")
 
@@ -67,7 +67,6 @@ model = args_cli.model.lower() if args_cli.model is not None else None
 def extract_physical_snapshot(info) -> dict[str, torch.Tensor]:
     """Read root + joint state"""
     return {
-        "root_pos_offset_w": info["root_pos_offset_w"].clone(),
         "root_quat_w":       info["root_quat_w"].clone(),
         "root_lin_vel_w":    info["root_lin_vel_w"].clone(),
         "root_ang_vel_w":    info["root_ang_vel_w"].clone(),
@@ -85,18 +84,18 @@ def print_progress_box(fill_status, timestep, max_timestep, elapsed_sec, eta_sec
     content_width = 64
     e_h = int(elapsed_sec // 3600); e_m = int((elapsed_sec % 3600) // 60); e_s = int(elapsed_sec % 60)
     c_h = int(eta_sec // 3600); c_m = int((eta_sec % 3600) // 60); c_s = int(eta_sec % 60)
+    cur, cap = fill_status
+    tag = "FULL" if cur >= cap else f"{100.0 * cur / max(cap, 1):5.1f}%"
     line_step = f"Step Progress {timestep} / {max_timestep}"
     line_time = f"Time Progress  {e_h:02d}:{e_m:02d}:{e_s:02d}/{c_h:02d}:{c_m:02d}:{c_s:02d}"
+    line_collection = f"[Collection] {cur}/{cap} ({tag}) | Step {timestep}/{max_timestep}"
     print(" ________________________________________________________________")
     print("|                                                                |")
     print(f"|{line_step.center(content_width)}|")
     print(f"|{line_time.center(content_width)}|")
     print("|________________________________________________________________|")
     print("|                                                                |")
-    cur, cap = fill_status
-    ratio = 100.0 * cur / max(cap, 1)
-    tag = "FULL" if cur >= cap else f"{ratio:5.1f}%"
-    print(f"[Collection] {cur}/{cap} ({tag}) | Step {timestep}/{max_timestep} | ETA {eta_sec:.0f}s")
+    print(f"|{line_collection.center(content_width)}|")
     print("|________________________________________________________________|")
 
 
@@ -121,8 +120,7 @@ def main():
         return
 
     # save_dir = next to predictor_checkpoint
-    save_dir = os.path.join(os.path.dirname(os.path.abspath(args_cli.predictor_checkpoint)),
-                            collection_cfg.get("save_subdir", "collected"),)
+    save_dir = os.path.join(os.path.dirname(os.path.abspath(args_cli.predictor_checkpoint)),"collected")
 
     # ============================ Env & Wrapper Spawn ================================
     seed = args_cli.seed if args_cli.seed is not None else pred_cfg.get("seed", 42)

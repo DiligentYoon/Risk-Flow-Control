@@ -18,11 +18,7 @@ agent:
 
 # Initial-condition dataset collection
 collection:
-  capacity_per_bucket: 100000
-  thresholds:
-    low_high: -0.2
-    mid_high: 0.4
+  capacity: 56000
   max_timestep: 64000
-  warmup_skip_steps: 4
-  subsample_stride: 4
-  save_subdir: "collected"
+  persistent_risk_steps: 10
+  risk_threshold: 0.0

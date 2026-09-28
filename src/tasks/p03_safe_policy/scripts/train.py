@@ -19,17 +19,7 @@ parser.add_argument("--num_envs", type=int, default=4096, help="Number of enviro
 parser.add_argument("--task", type=str, default="R1-intervention", help="Name of the task.")
 parser.add_argument("--checkpoint", type=str, default=None, help="Path to model checkpoint.")
 parser.add_argument("--predictor_checkpoint", type=str, default=None, help="Path to safety value network checkpoint.")
-
-parser.add_argument("--rollout_steps",
-                    type=int,
-                    default=3000,
-                    help="Number of vectorized environment steps to collect.")
-
-parser.add_argument("--algorithm",
-                    type=str,
-                    default="PPO",
-                    choices=["PPO", "SAC", "TD3", "MAPPO"],
-                    help="The RL algorithm used for training the agent.")
+parser.add_argument("--initial_dataset", type=str, default=None, help="Path to Risk Initial dataset.")
 
 parser.add_argument("--model",
                     type=str,
@@ -65,14 +55,8 @@ import lib
 import tasks
 
 from lib.utils.parse_utils import parse_env_cfg, load_cfg_from_registry
-from lib.buffer.rolloutbuffer import RolloutBuffer
-from lib.model.model_factory import ModelFactory
 
 from tasks.p03_safe_policy.wrappers.intervention_wrapper import InterventionEnvWrapper, InterventionEnvRecordVideo
-
-# config shortcuts
-algorithm = args_cli.algorithm.lower()
-model = args_cli.model.lower() if args_cli.model is not None else None
 
 def main():
     # ============================= Config Parsing ===============================
@@ -80,7 +64,7 @@ def main():
     env_cfg = parse_env_cfg(
         args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs, use_fabric=not args_cli.disable_fabric)
     try:
-        cfg = load_cfg_from_registry(args_cli.task, f"rl_{algorithm}_cfg_entry_point")
+        cfg = load_cfg_from_registry(args_cli.task, f"rl_single_cfg_entry_point")
         pred_cfg = load_cfg_from_registry(args_cli.task, "predictor_cfg_entry_point")
     except ValueError as e:
         print(e)
@@ -92,7 +76,7 @@ def main():
 
     if args_cli.predictor_checkpoint is not None:
         predictor_checkpoint = os.path.abspath(args_cli.predictor_checkpoint)
-        log_dir = os.path.join(predictor_checkpoint, datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + f"_{algorithm}")
+        log_dir = os.path.join(predictor_checkpoint, "safe_policy", datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
         os.makedirs(log_dir, exist_ok=True)
     else:
         log_dir = None
@@ -170,6 +154,8 @@ def main():
     tracking_timesteps = collections.deque(maxlen=env.num_envs)
     CLI_track_timesteps = collections.deque(maxlen=env.num_envs)
 
+    # Register Initial Dataset
+    env._unwrapped.cfg.events.reset_base.params["dataset_path"] = args_cli.initial_dataset
     obs, _, safety_states, infos = env.reset()
 
     timestep = 0

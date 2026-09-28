@@ -10,7 +10,6 @@ class RiskBuffer:
     """Replay buffer for initial-condition collection.
 
     Stored keys per bucket (all float32, shape ``(capacity, dim)``):
-        root_pos_offset_w     (3)
         root_quat_w    (4)
         root_lin_vel_w (3)
         root_ang_vel_w (3)
@@ -63,7 +62,6 @@ class RiskBuffer:
         start = self.write_idx
         end = start + n
 
-        self.tensors["root_pos_offset_w"][start:end].copy_(snapshot["root_pos_offset_w"][env_idx])
         self.tensors["root_quat_w"][start:end].copy_(snapshot["root_quat_w"][env_idx])
         self.tensors["root_lin_vel_w"][start:end].copy_(snapshot["root_lin_vel_w"][env_idx])
         self.tensors["root_ang_vel_w"][start:end].copy_(snapshot["root_ang_vel_w"][env_idx])

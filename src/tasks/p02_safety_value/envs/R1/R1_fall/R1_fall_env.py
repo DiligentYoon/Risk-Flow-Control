@@ -24,14 +24,6 @@ class R1FallEnv(R1BaseEnv):
         self.allowed_collision_link_ids, _ = self.contact_sensors.find_bodies(self.cfg.allowed_collision_bodies)
         self.denied_collision_link_ids = [body_id for body_id in total_body_ids if body_id not in self.allowed_collision_link_ids]
 
-        self.arm_deviation_joint_ids, _ = self._robot.find_joints([
-            r".*_shoulder_(roll|pitch|yaw)_joint",
-            r".*_elbow_joint",
-            r".*_wrist_roll_joint",
-            r"head_(pitch|yaw)_joint",
-        ])
-
-        self.swing_joint_ids, _ = self._robot.find_joints([r".*_shoulder_pitch_joint"])
         self.commands = UniformNonHolonomicCommand(self.cfg.commands, self._robot, self.device)
         self.mapping_sort_ids = torch.argsort(torch.tensor(self.total_arm_joint_ids + self.total_leg_joint_ids, device=self.device))
 
@@ -75,6 +67,15 @@ class R1FallEnv(R1BaseEnv):
             self.prev_actions = torch.zeros((self.num_envs, self._robot.num_joints), device=self.device)
 
         self.forward_vec = torch.tensor([1.0, 0.0, 0.0], device=self.device).repeat(self.num_envs, 1)
+
+        # State collection
+        self.extras["collection"] = {}
+        self.extras["collection"]["root_quat_w"]            = torch.zeros((self.num_envs, 4), dtype=torch.float32, device=self.device)
+        self.extras["collection"]["root_lin_vel_w"]         = torch.zeros((self.num_envs, 3), dtype=torch.float32, device=self.device)
+        self.extras["collection"]["root_ang_vel_w"]         = torch.zeros((self.num_envs, 3), dtype=torch.float32, device=self.device)
+        self.extras["collection"]["joint_pos"]              = torch.zeros((self.num_envs, self._robot.num_joints), dtype=torch.float32, device=self.device)
+        self.extras["collection"]["joint_vel"]              = torch.zeros((self.num_envs, self._robot.num_joints), dtype=torch.float32, device=self.device)
+        self.extras["collection"]["prev_action"]            = torch.zeros((self.num_envs, self._robot.num_joints), dtype=torch.float32, device=self.device)
 
         debug_vis = self.num_envs <= 32
         self.set_debug_vis(debug_vis)
@@ -198,6 +199,20 @@ class R1FallEnv(R1BaseEnv):
         return states
 
     def _get_safety_states(self):
+        # collection
+        self.extras["collection"]["root_quat_w"] = self._robot.data.root_quat_w
+        self.extras["collection"]["root_lin_vel_w"] = self._robot.data.root_lin_vel_w
+        self.extras["collection"]["root_ang_vel_w"] = self._robot.data.root_ang_vel_w
+        self.extras["collection"]["joint_pos"] = self._robot.data.joint_pos
+        self.extras["collection"]["joint_vel"] = self._robot.data.joint_vel
+        if self.cfg.num_agents > 1:
+            if self.extras["collection"].get('prev_action') is None:
+                self.extras["collection"]["prev_action"] = torch.tensor((self.num_envs, self._robot.num_joints), device=self.device)
+            self.extras["collection"]["prev_action"][:, self.total_arm_joint_ids] = self.prev_actions["arm"]
+            self.extras["collection"]["prev_action"][:, self.total_leg_joint_ids] = self.prev_actions["leg"]
+        else:
+            self.extras["collection"]["prev_action"] = self.prev_actions
+
         return torch.cat([self._robot.data.root_lin_vel_b,
                           self._robot.data.root_ang_vel_b,
                           self._robot.data.projected_gravity_b,

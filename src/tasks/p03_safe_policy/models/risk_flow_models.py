@@ -26,9 +26,6 @@ class MultiHorizonCritic(Model):
 
         D_h(s, a) = E[ V_N(s_{t+h}) - V_N(s_t) | s_t = s, a_t = a ]
 
-    ``D_0 = 0`` holds by definition and is a constant, not a network output, so the head count is
-    exactly ``H``.
-
     """
 
     def __init__(
