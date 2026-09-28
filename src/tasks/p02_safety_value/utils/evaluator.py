@@ -23,6 +23,7 @@ class RolloutEvaluator:
         self.g_buffer = torch.zeros((num_envs, max_segment_length), dtype=torch.float32, device=device)
         self.pred_buffer = torch.zeros((num_envs, max_segment_length), dtype=torch.float32, device=device)
         self.lengths = torch.zeros(num_envs, dtype=torch.long, device=device)
+        self.episode_pred_risk = torch.zeros(num_envs, dtype=torch.bool, device=device) 
 
         self.tp = 0
         self.fn = 0
@@ -36,12 +37,19 @@ class RolloutEvaluator:
         self.risk_persistence = 10
         self.safe_persistence = self.risk_persistence
 
+        self.episode_alarm_count = 0
+        self.episode_alarm_terminated = 0
+        self.episode_alarm_false = 0
+
         self.num_segments = 0
         self.num_samples = 0
         self.num_episodes = 0
         self.num_terminated = 0
         self.num_truncated = 0
         self.short_segments_skipped = 0
+
+        self.proactive_recall_sum = 0.0
+        self.proactive_recall_count = 0
 
         # Time-series history (single env : env_ids = 0)
         self.step_count = 0
@@ -102,6 +110,12 @@ class RolloutEvaluator:
 
         self._finalize(done)
 
+        done_pred_risk = self.episode_pred_risk & done
+        self.episode_alarm_count += int(done_pred_risk.sum().item())
+        self.episode_alarm_terminated += int((done_pred_risk & terminated).sum().item())
+        self.episode_alarm_false += int((done_pred_risk & (~terminated)).sum().item())
+        self.episode_pred_risk[done] = False
+
     @torch.no_grad()
     def _finalize(self, mask: torch.Tensor) -> None:
         env_ids = torch.nonzero(mask, as_tuple=False).flatten()
@@ -120,10 +134,10 @@ class RolloutEvaluator:
 
             # empirical value
             future_max_g = torch.flip(torch.cummax(torch.flip(g_values, dims=[0]), dim=0).values, dims=[0])
+
             # time-discounted empirical value
             discounted_empirical_value = torch.empty_like(g_values)
             discounted_empirical_value[-1] = g_values[-1]
-
             for t in range(g_values.numel()-2, -1, -1):
                 discounted_empirical_value[t] = (1.0 - self.discount_factor) * g_values[t] + self.discount_factor * torch.maximum(g_values[t], discounted_empirical_value[t+1])
 
@@ -140,6 +154,7 @@ class RolloutEvaluator:
 
                 self.env_segment_indices.clear()
 
+            # Risk coverage rate metric
             empirical_values = future_max_g[:-1]
             pred_values = pred_values[:-1]
 
@@ -155,10 +170,13 @@ class RolloutEvaluator:
             self.num_segments += 1
             self.lengths[env_id] = 0
 
+            # Safe decision metric
             real_segment_risk = bool(torch.any(g_values > self.threshold).item())
             step_risk = pred_values > self.threshold
             pred_segment_risk = self._has_consecutive_true(step_risk, self.risk_persistence)
 
+            if pred_segment_risk:
+                self.episode_pred_risk[env_id] = True
             if real_segment_risk and pred_segment_risk:
                 self.segment_tp += 1
             elif real_segment_risk and not pred_segment_risk:
@@ -167,6 +185,22 @@ class RolloutEvaluator:
                 self.segment_fp += 1
             else:
                 self.segment_tn += 1
+
+            # Proactive recall metric
+            unsafe_indices = torch.nonzero(g_values > self.threshold, as_tuple=False).flatten()
+            if unsafe_indices.numel() > 0:
+                unsafe_idx = int(unsafe_indices[0].item())
+
+                if unsafe_idx > 0:
+                    pred_idx = self._first_consecutive_true(step_risk, self.risk_persistence)
+
+                    if pred_idx is None:
+                        proactive_recall = 0.0
+                    else:
+                        proactive_recall = max(0.0, (unsafe_idx - pred_idx) / unsafe_idx)
+
+                    self.proactive_recall_sum += proactive_recall
+                    self.proactive_recall_count += 1
 
     @staticmethod
     def _safe_div(numerator: float, denominator: float) -> float:
@@ -186,16 +220,34 @@ class RolloutEvaluator:
                 run = 0
         return False
 
+    @staticmethod
+    def _first_consecutive_true(values: torch.Tensor, count: int) -> int | None:
+        run = 0
+        for i, value in enumerate(values.tolist()):
+            if value:
+                run += 1
+                if run >= count:
+                    return i
+            else:
+                run = 0
+        return None
+
     def compute(self) -> dict[str, float]:
         risk_coverage_rate = self._safe_div(self.tp, self.tp + self.fn)
         detection_rate = self._safe_div(self.segment_tp, self.segment_tp + self.segment_fn)
         false_alarm_rate = self._safe_div(self.segment_fp, self.segment_fp + self.segment_tn)
+        proactive_recall = self._safe_div(self.proactive_recall_sum, self.proactive_recall_count)
         accuracy = self._safe_div(self.segment_tp + self.segment_tn, self.num_segments)
+        episode_false_alarm_rate = self._safe_div(self.episode_alarm_false, self.num_truncated)
+        episode_detection_rate = self._safe_div(self.episode_alarm_terminated, self.num_terminated)
 
         return {
             "risk_coverage_rate": risk_coverage_rate,
-            "detection_rate": detection_rate,
-            "false_alarm_rate": false_alarm_rate,
+            "risk_detection_rate": detection_rate,
+            "risk_false_alarm_rate": false_alarm_rate,            
+            "termination_detection_rate": episode_detection_rate,
+            "termination_false_alarm_rate": episode_false_alarm_rate,
+            "proactive_recall": proactive_recall,
             "accuracy": accuracy,
             "real_risk_rate": self._safe_div(self.tp + self.fn, self.num_samples),
             "pred_risk_rate": self._safe_div(self.tp + self.fp, self.num_samples),

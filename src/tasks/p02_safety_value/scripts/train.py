@@ -111,9 +111,9 @@ def main() -> None:
 
             print(
                 f"[TRAIN] update={update}/{total_updates} | "
-                f"loss={train_metrics['loss']:.6f} | "
-                f"loss_1={train_metrics['loss_1']:.6f} | "
-                f"loss_2={train_metrics['loss_2']:.6f} | "
+                f"loss={train_metrics['loss']:.5f} | "
+                f"loss_1={train_metrics['loss_1']:.5f} | "
+                f"loss_2={train_metrics['loss_2']:.5f} | "
                 f"value_mean={train_metrics['value_mean']:.4f} | "
                 f"target_mean={train_metrics['target_mean']:.4f} | "
                 f"gap={train_metrics['critic_gap']:.4f}"
@@ -127,11 +127,14 @@ def main() -> None:
 
             print(
                 f"[EVAL] update={update}/{total_updates} | "
-                f"td_loss={eval_metrics['td_loss']:.6f} | "
+                f"td_loss={eval_metrics['td_loss']:.5f} | "
                 f"gap={eval_metrics['critic_gap']:.4f} | "
                 f"RCR={eval_metrics['risk_coverage_rate']:.4f} | "
-                f"DR={eval_metrics['detection_rate']:.4f} | "
-                f"FAR={eval_metrics['false_alarm_rate']:.4f} | "
+                f"RDR={eval_metrics['risk_detection_rate']:.4f} | "
+                f"RFAR={eval_metrics['risk_false_alarm_rate']:.4f} | "
+                f"Termination_DR={eval_metrics['termination_detection_rate']:.4f} | "
+                f"Termination_FAR={eval_metrics['termination_false_alarm_rate']:.4f} | "
+                f"PR={eval_metrics['proactive_recall']:.4f} | "
                 f"Accuracy={eval_metrics['accuracy']:.4f} | "
                 f"pred_risk={eval_metrics['pred_risk_rate']:.4f} | "
                 f"real_risk={eval_metrics['real_risk_rate']:.4f}"
@@ -156,11 +159,14 @@ def main() -> None:
 
     print(
         f"[TEST] "
-        f"RCR={eval_metrics['risk_coverage_rate']:.4f} | "
-        f"td_loss={test_metrics['td_loss']:.6f} | "
-        f"DR={test_metrics['detection_rate']:.4f} | "
-        f"FAR={test_metrics['false_alarm_rate']:.4f} | "
-        f"Accuracy={test_metrics['accuracy']:.4f} | "
+        f"td_loss={test_metrics['td_loss']:.5f} | "
+        f"Risk coverage rate={test_metrics['risk_coverage_rate'] * 100:.2f}% | "
+        f"Risk Detection rate={test_metrics['risk_detection_rate'] * 100:.2f}% | "
+        f"Risk False alarm rate={test_metrics['risk_false_alarm_rate'] * 100:.2f}% | "
+        f"Termination detection rate={test_metrics['termination_detection_rate'] * 100:.2f}% | "
+        f"Termination false alarm rate={test_metrics['termination_false_alarm_rate'] * 100:.2f}% | "
+        f"Proactive recall={test_metrics['proactive_recall']* 100:.2f} | "
+        f"Accuracy={test_metrics['accuracy'] * 100:.2f}% | "
         f"pred_risk={test_metrics['pred_risk_rate']:.4f} | "
         f"real_risk={test_metrics['real_risk_rate']:.4f}"
     )
