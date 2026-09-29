@@ -7,17 +7,7 @@ import torch
 
 
 class RiskBuffer:
-    """Replay buffer for initial-condition collection.
-
-    Stored keys per bucket (all float32, shape ``(capacity, dim)``):
-        root_quat_w    (4)
-        root_lin_vel_w (3)
-        root_ang_vel_w (3)
-        joint_pos      (joint_dim)
-        joint_vel      (joint_dim)
-        prev_action    (joint dim)
-        risk_score     (1)
-    """
+    """Replay buffer for initial-condition collection."""
 
     def __init__(self, capacity: int, joint_dim: int, device: Optional[Union[str, torch.device]] = None) -> None:
         self.capacity = int(capacity)
@@ -62,6 +52,7 @@ class RiskBuffer:
         start = self.write_idx
         end = start + n
 
+        self.tensors["root_pos_offset_w"][start:end].copy_(snapshot["root_pos_offset_w"][env_idx])
         self.tensors["root_quat_w"][start:end].copy_(snapshot["root_quat_w"][env_idx])
         self.tensors["root_lin_vel_w"][start:end].copy_(snapshot["root_lin_vel_w"][env_idx])
         self.tensors["root_ang_vel_w"][start:end].copy_(snapshot["root_ang_vel_w"][env_idx])

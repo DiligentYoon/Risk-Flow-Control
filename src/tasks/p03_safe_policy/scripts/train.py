@@ -24,7 +24,7 @@ parser.add_argument("--initial_dataset", type=str, default=None, help="Path to R
 parser.add_argument("--model",
                     type=str,
                     default="MLP",
-                    choices=["MLP", "Shared", "Communet"],
+                    choices=["MLP", "Shared"],
                     help="The NN model used for training the agent.")
 
 # append AppLauncher cli args
@@ -153,9 +153,10 @@ def main():
     tracking_timesteps = collections.deque(maxlen=env.num_envs)
     CLI_track_timesteps = collections.deque(maxlen=env.num_envs)
 
-    obs, states, safety_states, infos = env.reset()
+    obs, states, safety_states, _, infos = env.reset()
 
     timestep = 0
+    logstep = 0
     elapsed_time = 0
     start_time = time.time()
     CLI_interval = 100
@@ -262,7 +263,7 @@ def main():
                 e_m = int((elapsed_time % 3600) // 60)
                 e_s = int(elapsed_time % 60)
                 total_rollout = int(cfg["train"]["timesteps"] // CLI_interval)
-                complete_time = (end_time - start_time) * total_rollout
+                complete_time = (end_time - start_time) * (total_rollout - logstep)
                 c_h = int(complete_time // 3600)
                 c_m = int((complete_time % 3600) // 60)
                 c_s = int(complete_time % 60)
@@ -273,7 +274,7 @@ def main():
                 line_rollout_time = f"Rollout Time      : {end_time - start_time:6.3f} sec"
                 line_value_loss = f"Value Loss        : {value_loss_str}"
                 line_policy_loss = f"Policy Loss       : {policy_loss_str}"
-                line_flow_mean = f"Flow Mean        : {flow_mean_str}"
+                line_flow_mean = f"Flow Mean         : {flow_mean_str}"
                 line_episode_step = f"Avg Episode Step  : {avg_ep_step_str}"
 
                 print(f" ________________________________________________________________")
@@ -289,6 +290,7 @@ def main():
                 print(f"| {line_episode_step:<{content_width-1}}|")
                 print(f"|________________________________________________________________|")
 
+                logstep += 1
                 start_time = end_time
 
             # Checkpoint save

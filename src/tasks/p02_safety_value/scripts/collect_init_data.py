@@ -67,6 +67,7 @@ model = args_cli.model.lower() if args_cli.model is not None else None
 def extract_physical_snapshot(info) -> dict[str, torch.Tensor]:
     """Read root + joint state"""
     return {
+        "root_pos_offset_w": info["root_pos_offset_w"].clone(),
         "root_quat_w":       info["root_quat_w"].clone(),
         "root_lin_vel_w":    info["root_lin_vel_w"].clone(),
         "root_ang_vel_w":    info["root_ang_vel_w"].clone(),

@@ -70,6 +70,7 @@ class R1FallEnv(R1BaseEnv):
 
         # State collection
         self.extras["collection"] = {}
+        self.extras["collection"]["root_pos_offset_w"]      = torch.zeros((self.num_envs, 3), dtype=torch.float32, device=self.device)
         self.extras["collection"]["root_quat_w"]            = torch.zeros((self.num_envs, 4), dtype=torch.float32, device=self.device)
         self.extras["collection"]["root_lin_vel_w"]         = torch.zeros((self.num_envs, 3), dtype=torch.float32, device=self.device)
         self.extras["collection"]["root_ang_vel_w"]         = torch.zeros((self.num_envs, 3), dtype=torch.float32, device=self.device)
@@ -200,6 +201,7 @@ class R1FallEnv(R1BaseEnv):
 
     def _get_safety_states(self):
         # collection
+        self.extras["collection"]["root_pos_offset_w"] = self._robot.data.root_pos_w - self.scene.env_origins
         self.extras["collection"]["root_quat_w"] = self._robot.data.root_quat_w
         self.extras["collection"]["root_lin_vel_w"] = self._robot.data.root_lin_vel_w
         self.extras["collection"]["root_ang_vel_w"] = self._robot.data.root_ang_vel_w

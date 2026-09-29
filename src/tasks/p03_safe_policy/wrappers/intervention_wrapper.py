@@ -81,10 +81,10 @@ class InterventionEnvWrapper(IsaacLabWrapper):
             self._info,
         )
 
-    def reset(self) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Any]:
+    def reset(self) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, Any]:
         """Reset the environment."""
         if self._reset_once:
-            observations, states, safety_states, self._info = self._env.reset()
+            observations, states, safety_states, safety_values, self._info = self._env.reset()
 
             self._observations = flatten_tensorized_space(tensorize_space(self.observation_space, observations))
             if states is not None:
@@ -93,7 +93,7 @@ class InterventionEnvWrapper(IsaacLabWrapper):
 
             self._reset_once = False
 
-        return self._observations, self._states, self._safety_states, self._info
+        return self._observations, self._states, self._safety_states, safety_values.reshape(-1, 1), self._info
 
 
 class InterventionEnvRecordVideo(RecordVideo):
@@ -110,7 +110,7 @@ class InterventionEnvRecordVideo(RecordVideo):
 
     def reset(self, *, seed=None, options=None):
         """Reset the environment and eventually start a new recording."""
-        observations, states, safety_states, info = self.env.reset(seed=seed, options=options)
+        observations, states, safety_states, safety_values, info = self.env.reset(seed=seed, options=options)
         self.episode_id += 1
 
         if self.recording and self.video_length == float("inf"):
@@ -123,7 +123,7 @@ class InterventionEnvRecordVideo(RecordVideo):
             if len(self.recorded_frames) > self.video_length:
                 self.stop_recording()
 
-        return observations, states, safety_states, info
+        return observations, states, safety_states, safety_values, info
 
     def step(self, action):
         """Step the environment, recording a frame while :attr:`recording` is set."""

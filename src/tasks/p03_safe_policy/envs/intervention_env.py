@@ -26,6 +26,16 @@ class InterventionEnv(SafeValueEnv):
     def __init__(self, cfg: InterventionEnvCfg, render_mode: str | None = None, **kwargs):
         super().__init__(cfg, render_mode, **kwargs)
 
+    def reset(
+        self, seed: int | None = None, options: dict[str, Any] | None = None
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, dict]:
+        obs, states, safety_states, extras = super().reset(seed=seed, options=options)
+
+        self.safety_value_buf = self._get_safety_values()
+
+        return obs, states, safety_states, self.safety_value_buf, extras
+
+
     def step(
         self, action: Union[torch.Tensor, Dict[str, torch.Tensor]]
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, dict]:

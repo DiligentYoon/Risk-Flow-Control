@@ -14,6 +14,7 @@ class reset_state_from_dataset(ManagerTermBase):
     
     """
     REQUIRED_KEYS: tuple[str, ...] = (
+        "root_pos_offset_w", 
         "root_quat_w",
         "root_lin_vel_w", 
         "root_ang_vel_w",
@@ -59,6 +60,7 @@ class reset_state_from_dataset(ManagerTermBase):
 
         if dataset_path is not None:
             row = torch.randint(0, self._buffer_length, (n,), device=self._device)
+            root_pos_offset = self._buffer["root_pos_offset_w"][row]
             root_quat       = self._buffer["root_quat_w"][row]
             root_lin_vel    = self._buffer["root_lin_vel_w"][row]
             root_ang_vel    = self._buffer["root_ang_vel_w"][row]
@@ -68,7 +70,7 @@ class reset_state_from_dataset(ManagerTermBase):
         else:
             joint_pos = self.asset.data.default_joint_pos[env_ids]
 
-        root_pos = env.scene.env_origins[env_ids]
+        root_pos = env.scene.env_origins[env_ids] + root_pos_offset
 
         self.asset.write_root_pose_to_sim(torch.cat([root_pos, root_quat], dim=-1), env_ids=env_ids)
         self.asset.write_root_velocity_to_sim(torch.cat([root_lin_vel, root_ang_vel], dim=-1), env_ids=env_ids)
