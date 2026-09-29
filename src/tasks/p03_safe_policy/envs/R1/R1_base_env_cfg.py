@@ -39,15 +39,6 @@ class EventCfg:
         },
     )
 
-    reset_robot_joints = EventTerm(
-        func=randomizer.reset_joints_by_scale,
-        mode="reset",
-        params={
-            "position_range": (1.0, 1.0),
-            "velocity_range": (0.0, 0.0),
-        },
-    )
-
 
 @configclass
 class R1BaseEnvCfg(InterventionEnvCfg):

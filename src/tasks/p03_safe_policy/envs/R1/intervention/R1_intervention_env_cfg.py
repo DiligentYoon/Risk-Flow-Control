@@ -32,7 +32,8 @@ class R1InterventionEnvCfg(R1BaseEnvCfg):
 
     ## ========== Single Agent Setting ========== ##
     action_space = 26
-    observation_space = 92
+    observation_space = 87
+    state_space = 87
     num_agents = 1
     action_scale_factor = 0.5
 

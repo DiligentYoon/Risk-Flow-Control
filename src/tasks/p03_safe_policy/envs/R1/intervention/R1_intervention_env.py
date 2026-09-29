@@ -118,7 +118,14 @@ class R1InterventionEnv(R1BaseEnv):
                 "leg": shared_states,
             }
         else:
-            states = None
+            states = torch.cat([
+                self._robot.data.root_lin_vel_b,
+                self._robot.data.root_ang_vel_b,
+                self._robot.data.projected_gravity_b,
+                self._robot.data.joint_pos,
+                self._robot.data.joint_vel,
+                self.prev_actions,
+            ], dim=-1)
 
         return states
 

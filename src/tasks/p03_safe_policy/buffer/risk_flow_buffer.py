@@ -21,10 +21,12 @@ class RiskFlowBuffer(Buffer):
     def __init__(self, buffer_size: int = 1, num_envs: int = 1, device: Optional[Union[str, torch.device]] = None) -> None:
         super().__init__(buffer_size, num_envs, device)
 
-    def init_buffer(self, observation_space: gymnasium.Space, safety_state_space: gymnasium.Space, action_space: gymnasium.Space) -> None:
+    def init_buffer(self, observation_space: gymnasium.Space, state_space: gymnasium.Space, safety_state_space: gymnasium.Space, action_space: gymnasium.Space) -> None:
         """Allocate every tensor at once."""
         self.create_tensor("observations", observation_space, dtype=torch.float32)
         self.create_tensor("final_observations", observation_space, dtype=torch.float32)
+        self.create_tensor("states", state_space, dtype=torch.float32)
+        self.create_tensor("final_states", state_space, dtype=torch.float32)
         self.create_tensor("safety_states", safety_state_space, dtype=torch.float32)
         self.create_tensor("final_safety_states", safety_state_space, dtype=torch.float32)
         self.create_tensor("actions", action_space, dtype=torch.float32)
@@ -38,9 +40,11 @@ class RiskFlowBuffer(Buffer):
     def add_samples(
         self,
         observations: torch.Tensor,
+        states: torch.Tensor,
         safety_states: torch.Tensor,
         actions: torch.Tensor,
         final_observations: torch.Tensor,
+        final_states: torch.Tensor,
         final_safety_states: torch.Tensor,
         terminated: torch.Tensor,
         truncated: torch.Tensor,
@@ -48,9 +52,11 @@ class RiskFlowBuffer(Buffer):
         """Store one transition per environment."""
         super().add_samples(
             observations=observations,
+            states=states,
             safety_states=safety_states,
             actions=actions,
             final_observations=final_observations,
+            final_states=final_states,
             final_safety_states=final_safety_states,
             terminated=self._ensure_2d_column(terminated),
             truncated=self._ensure_2d_column(truncated),
@@ -92,22 +98,13 @@ class RiskFlowBuffer(Buffer):
         indexes = torch.randint(
             low=0,
             high=size,
-            size=(min(batch_size, size),),
+            size=(batch_size,),
             dtype=torch.long,
             device=self.device,
         )
 
         self.sampling_indexes = indexes
         return self.sample_by_index(names=names, indexes=indexes, mini_batches=1)[0]
-
-    @property
-    def memory_bytes(self) -> int:
-        """Bytes occupied by the stored tensors.
-
-        The simulator and the models share the GPU with this buffer, so its footprint is a budget
-        item rather than an afterthought.
-        """
-        return sum(tensor.numel() * tensor.element_size() for tensor in self.tensors.values())
 
     @staticmethod
     def _ensure_2d_column(tensor: torch.Tensor) -> torch.Tensor:

@@ -75,7 +75,7 @@ class reset_state_from_dataset(ManagerTermBase):
         self.asset.write_joint_state_to_sim(joint_pos, joint_vel, env_ids=env_ids)
         # Stage prev_action for env._reset_idx to consume.
         if env.cfg.num_agents > 1:
-            env.prev_actions["arm"][env_ids] = prev_action[env_ids][:, self.total_arm_joint_ids]
-            env.prev_actions["leg"][env_ids] = prev_action[env_ids][:, self.total_leg_joint_ids]
+            env.prev_actions["arm"][env_ids] = prev_action[:, self.total_arm_joint_ids]
+            env.prev_actions["leg"][env_ids] = prev_action[:, self.total_leg_joint_ids]
         else:
-            env.prev_actions[env_ids] = prev_action[env_ids]
+            env.prev_actions[env_ids] = prev_action

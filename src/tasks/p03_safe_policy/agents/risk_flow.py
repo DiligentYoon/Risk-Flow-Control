@@ -27,6 +27,8 @@ import torch.nn.functional as F
 
 from lib.agent.agent import Agent
 
+from tasks.p02_safety_value.agent.safety import Safety
+
 from ..buffer.risk_flow_buffer import RiskFlowBuffer
 from ..models.risk_flow_models import LagrangeMultiplier
 
@@ -38,7 +40,7 @@ class RiskFlow(Agent):
         self,
         model: Dict[str, nn.Module],
         buffer: Optional[RiskFlowBuffer],
-        safety_value: nn.Module,
+        safety_value: Safety,
         device: Union[str, torch.device],
         cfg: Dict,
     ) -> None:
@@ -108,9 +110,11 @@ class RiskFlow(Agent):
 
         self.tensors_names = [
             "observations",
+            "states",
             "safety_states",
             "actions",
             "final_observations",
+            "final_states",
             "final_safety_states",
             "terminated",
             "truncated",
@@ -119,20 +123,6 @@ class RiskFlow(Agent):
         self.set_running_mode("eval")
 
     def act(self, observations: torch.Tensor, deterministic: bool = False) -> torch.Tensor:
-        """Select the action to execute.
-
-        The exploration noise is added here rather than inside the environment, so that the tensor
-        returned is exactly the one that gets executed *and* the one that gets stored: an
-        environment-side noise model would make the critic learn about an action that was never
-        taken. It is uncorrelated Gaussian and is neither squashed nor clipped.
-
-        Args:
-            observations: Policy observations, shape (num_envs, observation_dim).
-            deterministic: Drop the exploration noise.
-
-        Returns:
-            Actions, shape (num_envs, action_dim).
-        """
         with torch.no_grad():
             actions = self.actor(observations)
             if not deterministic and self.exploration_sigma > 0.0:
@@ -143,32 +133,26 @@ class RiskFlow(Agent):
     def insert_data(
         self,
         observations: torch.Tensor,
+        states: torch.Tensor,
         safety_states: torch.Tensor,
         actions: torch.Tensor,
         final_observations: torch.Tensor,
+        final_states: torch.Tensor,
         final_safety_states: torch.Tensor,
         terminated: torch.Tensor,
         truncated: torch.Tensor,
     ) -> None:
-        """Store one transition per environment.
-
-        ``final_*`` are the pre-reset snapshots published by :class:`ConstraintsEnv`, not the
-        post-reset observations of the step tuple. On a terminal step the two differ, and it is the
-        snapshot that carries the state the action actually led to.
-        """
         self.buffer.add_samples(
             observations=observations,
+            states=states,
             safety_states=safety_states,
             actions=actions,
             final_observations=final_observations,
+            final_states=final_states,
             final_safety_states=final_safety_states,
             terminated=terminated,
             truncated=truncated,
         )
-
-    def can_update(self) -> bool:
-        """Whether enough transitions have been collected to start learning."""
-        return len(self.buffer) >= self.learning_starts * self.buffer.num_envs
 
     @torch.no_grad()
     def compute_target(
@@ -176,6 +160,7 @@ class RiskFlow(Agent):
         safety_states: torch.Tensor,
         final_safety_states: torch.Tensor,
         final_observations: torch.Tensor,
+        final_states: torch.Tensor,
         terminated: torch.Tensor,
     ) -> torch.Tensor:
         """Build the one-step TD target of every horizon head.
@@ -193,17 +178,17 @@ class RiskFlow(Agent):
         """
         # Delta_N is recomputed from the stored states rather than read back from the buffer:
         # storing it would pin every sample to one particular V_N.
-        value, _, _ = self.safety_value(safety_states)
-        next_value, _, _ = self.safety_value(final_safety_states)
+        value = self.safety_value.predict(safety_states)
+        next_value = self.safety_value.predict(final_safety_states)
         delta = next_value - value
 
         next_actions = self.target_actor(final_observations)
-        next_flow = self.target_critic(final_safety_states, next_actions) # [B, H]
+        next_flow = self.target_critic(final_states, next_actions) # [B, H]
 
         mask = (~terminated).to(dtype=next_flow.dtype) # Assumption : risk stays at its maximum after failure.
 
         target = torch.empty_like(next_flow)
-        target[:, :1] = delta # boundary condition D_0 = 0.
+        target[:, :1] = delta
         # If the next state is terminated, no more change of risk is assumed.
         target[:, 1:] = delta + mask * next_flow[:, :-1] # [B, H-1] + [B, 1] x [B, H-1]
 
@@ -211,14 +196,6 @@ class RiskFlow(Agent):
 
     @torch.no_grad()
     def update_target(self) -> None:
-        """Polyak-average the target critic towards the online one.
-
-        Parameters are blended; the normalization statistics are *copied*. They are not learned
-        quantities but a running description of the input distribution, and the online network has
-        already moved on to them -- a lagging copy would standardize the target's input with
-        statistics that no longer describe it, which is a second moving target rather than a
-        stabilizer.
-        """
         for target_parameter, parameter in zip(self.target_critic.parameters(), self.critic.parameters()):
             target_parameter.mul_(1.0 - self.target_update_tau).add_(parameter, alpha=self.target_update_tau)
 
@@ -232,27 +209,24 @@ class RiskFlow(Agent):
             target_buffer.copy_(buffer)
 
     def update(self) -> Optional[Dict[str, Any]]:
-        """Run one critic update.
-
-        Returns:
-            Logging quantities, or ``None`` while the buffer is still below ``learning_starts``.
-        """
-        if not self.can_update():
+        if not (len(self.buffer) >= self.learning_starts * self.buffer.num_envs):
             return None
 
         (
             observations,
+            states,
             safety_states,
             actions,
             final_observations,
+            final_states,
             final_safety_states,
             terminated,
             truncated,
         ) = self.buffer.sample_batch(self.tensors_names, self.batch_size)
 
         # Update Critic Network
-        target = self.compute_target(safety_states, final_safety_states, final_observations, terminated)
-        flow = self.critic(safety_states, actions, update_rms=True)
+        target = self.compute_target(safety_states, final_safety_states, final_observations, final_states, terminated)
+        flow = self.critic(states, actions, update_rms=True)
         critic_loss = F.mse_loss(flow, target)
 
         self.critic_optimizer.zero_grad()
@@ -263,25 +237,20 @@ class RiskFlow(Agent):
 
         # Update Actor Network and Dual Parameter.
         if self.update_actor:
-            actor_info, violation = self._update_actor(observations, safety_states)
+            actor_info, violation = self._update_actor(observations, states, safety_states)
             dual_info = self._update_dual(violation) if violation is not None else {}
 
         self.update_target()
 
-        with torch.no_grad():
-            per_head_loss = (flow - target).pow(2).mean(dim=0)
-
         if self.update_actor:
 
             return {"critic_loss": critic_loss.item(),
-                    "per_head_loss": per_head_loss,
                     **actor_info,
                     **dual_info}
         else:
-            return {"critic_loss": critic_loss.item(),
-                    "per_head_loss": per_head_loss}
+            return {"critic_loss": critic_loss.item()}
 
-    def _update_actor(self, observations: torch.Tensor, safety_states: torch.Tensor) -> Dict[str, Any]:
+    def _update_actor(self, observations: torch.Tensor, states: torch.Tensor, safety_states: torch.Tensor) -> Dict[str, Any]:
         """Run one actor update.
 
         Minimizes the mean predicted risk flow plus the control cost::
@@ -300,14 +269,14 @@ class RiskFlow(Agent):
         actions = self.actor(observations, update_rms=True)
 
         with self.critic.frozen():
-            flow = self.critic(safety_states, actions)
+            flow = self.critic(states, actions)
 
         objective = flow.mean(dim=1)
 
         violation = None
         if self.update_dual:
             with torch.no_grad():
-                value, _, _ = self.safety_value(safety_states)
+                value = self.safety_value.predict(safety_states)
             violation = value.squeeze(-1) + flow[:, -1] - self.terminal_risk_threshold
             objective = objective + self.lagrange().detach() * violation
 

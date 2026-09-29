@@ -8,6 +8,7 @@ buffer:
 
 agent:
   class: RiskFlow
+  horizon: 200
   batch_size: 4096
   learning_starts: 64
   grad_norm_clip: 1.0

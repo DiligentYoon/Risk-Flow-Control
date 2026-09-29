@@ -76,13 +76,14 @@ def main():
 
     if args_cli.predictor_checkpoint is not None:
         predictor_checkpoint = os.path.abspath(args_cli.predictor_checkpoint)
-        log_dir = os.path.join(predictor_checkpoint, "safe_policy", datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
+        log_dir = os.path.join(os.path.dirname(predictor_checkpoint), "intervention_policy", datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
         os.makedirs(log_dir, exist_ok=True)
     else:
         log_dir = None
 
     # ============================ Env & Wrapper Spawn ================================
     env_cfg.total_timesteps = cfg["train"]["timesteps"]
+    env_cfg.events.reset_base.params["dataset_path"] = args_cli.initial_dataset
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
     # wrap for video recording
     if (args_cli.video) and log_dir is not None:
@@ -114,24 +115,21 @@ def main():
                   "critic_2": SafetyCritic(num_states=num_safety_states, device=env.device)}
     pred_agent = Safety(model=pred_model, device=env.device, cfg=pred_cfg["agent"])
 
-    # ======================= Buffer =========================
+    # ======================= Buffer & Model & Agent =========================
     from tasks.p03_safe_policy.buffer.risk_flow_buffer import RiskFlowBuffer
     from tasks.p03_safe_policy.agents.risk_flow import RiskFlow
     from tasks.p03_safe_policy.models.risk_flow_models import MultiHorizonCritic, DeterministicActor
 
-    horizon = int(env.max_episode_length) - 1
-    cfg["agent"]["horizon"] = horizon
-
     buffer = RiskFlowBuffer(buffer_size=cfg["buffer"]["buffer_size"], num_envs=env.num_envs, device=env.device)
-    buffer.init_buffer(env.observation_space, env.safety_state_space, env.action_space)
+    buffer.init_buffer(env.observation_space, env.state_space, env.safety_state_space, env.action_space)
 
     observation_dim = buffer.tensors["observations"].shape[-1]
-    safety_state_dim = buffer.tensors["constraint_states"].shape[-1]
+    state_dim = buffer.tensors["states"].shape[-1]
     action_dim = buffer.tensors["actions"].shape[-1]
     
-    model =  {"critic": MultiHorizonCritic(safety_state_dim, action_dim, horizon, device=env.device, output_gain=0.01),
+    model =  {"critic": MultiHorizonCritic(state_dim, action_dim, cfg["agent"]["horizon"], device=env.device, output_gain=0.01),
               "actor": DeterministicActor(observation_dim, action_dim, device=env.device, output_gain=0.01)}
-    agent = RiskFlow(model, buffer, pred_model, device=env.device, cfg=cfg["agent"])
+    agent = RiskFlow(model, buffer, pred_agent, device=env.device, cfg=cfg["agent"])
 
     # ============================= Checkpoints ============================= #
     if args_cli.checkpoint is not None:
@@ -142,8 +140,9 @@ def main():
         print("[INFO] Unfortunately a pre-trained policy is not found for this task.")
 
     if args_cli.predictor_checkpoint is not None:
+        pred_resume_path = os.path.abspath(args_cli.predictor_checkpoint)
         pred_agent.load(predictor_checkpoint)
-        print(f"[INFO] Get checkpoint of value network from {resume_path}")
+        print(f"[INFO] Get checkpoint of value network from {pred_resume_path}")
     else:
         print("[INFO] Unfortunately a pre-trained value network is not found for this task.")
 
@@ -154,41 +153,46 @@ def main():
     tracking_timesteps = collections.deque(maxlen=env.num_envs)
     CLI_track_timesteps = collections.deque(maxlen=env.num_envs)
 
-    # Register Initial Dataset
-    env._unwrapped.cfg.events.reset_base.params["dataset_path"] = args_cli.initial_dataset
-    obs, _, safety_states, infos = env.reset()
+    obs, states, safety_states, infos = env.reset()
 
     timestep = 0
-    CLI_interval = 500
+    elapsed_time = 0
+    start_time = time.time()
+    CLI_interval = 100
 
     try:
-        while (simulation_app.is_running() and timestep < args_cli.rollout_steps):
-            start_time = time.time()
+        while (simulation_app.is_running() and timestep < cfg["train"]["timesteps"]):
             with torch.inference_mode():
-                actions, _, _ = agent.act(obs, infos, timestep=timestep, deterministic=False)
+                actions = agent.act(obs, deterministic=False)
 
                 (
                     next_obs,
                     next_states,
                     next_safety_states,
                     next_safety_values,
+                    final_obs,
+                    final_states,
                     final_safety_states,
                     final_safety_values,
                     rewards,
                     terminated,
                     truncated,
-                    final_push_events,
                     next_infos,
                 ) = env.step(actions)
 
             timestep += 1
 
-            with torch.no_grad():
-                value = pred_agent.predict(safety_states)
-                final_value = pred_agent.predict(final_safety_states)
-                delta = final_value - value
-
-            tracking_data["Value / Delta_N"].append(delta.mean().item())
+            agent.insert_data(
+                observations=obs,
+                states=states,
+                safety_states=safety_states,
+                actions=actions,
+                final_observations=final_obs,
+                final_states=final_states,
+                final_safety_states=final_safety_states,
+                terminated=terminated,
+                truncated=truncated
+            )
 
             # ================== Learning Phase =====================
             info = agent.update()
@@ -198,21 +202,30 @@ def main():
                 if not np.isfinite(info["critic_loss"]):
                     print(f"The critic loss diverges at step {timestep}.")
                     break
-
-                tracking_data["Loss / critic"].append(info["critic_loss"])
-                per_head_sum += info["per_head_loss"]
-                per_head_count += 1
+                value_loss = info["critic_loss"]
+                tracking_data["Loss / critic"].append(value_loss)
 
                 if "actor_loss" in info:
-                    tracking_data["Loss / actor"].append(info["actor_loss"])
-                    tracking_data["Policy / flow mean"].append(info["flow_mean"])
+                    policy_loss = info["actor_loss"]
+                    flow_mean = info["flow_mean"]
+                    tracking_data["Loss / actor"].append(policy_loss)
+                    tracking_data["Policy / flow mean"].append(flow_mean)
+                else:
+                    policy_loss = None
+                    flow_mean = None
+
+            with torch.no_grad():
+                value = pred_agent.predict(safety_states)
+                next_value = pred_agent.predict(final_safety_states)
+                delta = next_value - value
+            tracking_data["Value / Delta_N"].append(delta.mean().item())
 
             if cumulative_timesteps is None:
                 cumulative_timesteps = torch.zeros((env.num_envs, 1), dtype=torch.int32)
             cumulative_timesteps.add_(1)
 
             done = (terminated | truncated).squeeze(-1)
-            finished_episodes = done.nonzero(as_tuple=False).squeeze(-1)
+            finished_episodes = done.nonzero(as_tuple=False).squeeze(-1).cpu()
             if finished_episodes.numel():
                 tracking_timesteps.extend(cumulative_timesteps[finished_episodes][:, 0].reshape(-1).tolist())
                 CLI_track_timesteps.extend(cumulative_timesteps[finished_episodes][:, 0].detach().cpu().tolist())
@@ -235,18 +248,21 @@ def main():
                 tracking_data.clear()
 
             # CLI Logging about the training process at each parameter update
-            end_time = time.time()
-            if timestep % CLI_interval:
+            if timestep % CLI_interval == 0:
+                end_time = time.time()
                 avg_ep_step = float(np.mean(CLI_track_timesteps)) if len(CLI_track_timesteps) else float("nan")
 
-                ep_step = "-" if np.isnan(avg_ep_step) else f"{avg_ep_step:6.3f} steps"
+                avg_ep_step_str = "-" if np.isnan(avg_ep_step) else f"{avg_ep_step:6.3f} steps"
+                value_loss_str = f"{value_loss:6.3f}"
+                policy_loss_str = "-" if policy_loss is None else f"{policy_loss:6.3f}"
+                flow_mean_str = "-" if flow_mean is None else f"{flow_mean:6.3f}"
 
                 elapsed_time += (end_time - start_time)
                 e_h = int(elapsed_time // 3600)
                 e_m = int((elapsed_time % 3600) // 60)
                 e_s = int(elapsed_time % 60)
-                total_rollout = int(cfg["train"]["timesteps"] // buffer.buffer_size)
-                complete_time = (end_time - start_time) * (total_rollout - CLI_interval)
+                total_rollout = int(cfg["train"]["timesteps"] // CLI_interval)
+                complete_time = (end_time - start_time) * total_rollout
                 c_h = int(complete_time // 3600)
                 c_m = int((complete_time % 3600) // 60)
                 c_s = int(complete_time % 60)
@@ -255,9 +271,10 @@ def main():
                 line_header = f"Step Progress {timestep} / {cfg['train']['timesteps']}"
                 line_time_header = f"Time Progress  {e_h:02d}:{e_m:02d}:{e_s:02d}/{c_h:02d}:{c_m:02d}:{c_s:02d}"
                 line_rollout_time = f"Rollout Time      : {end_time - start_time:6.3f} sec"
-                line_value_loss = f"Value Loss        : {info["critic_loss"]:6.3f}"
-                line_policy_loss = f"Policy Loss       : {info["actor_loss"]:6.3f}"
-                line_episode_step = f"Avg Episode Step  : {ep_step}"
+                line_value_loss = f"Value Loss        : {value_loss_str}"
+                line_policy_loss = f"Policy Loss       : {policy_loss_str}"
+                line_flow_mean = f"Flow Mean        : {flow_mean_str}"
+                line_episode_step = f"Avg Episode Step  : {avg_ep_step_str}"
 
                 print(f" ________________________________________________________________")
                 print(f"|                                                                |")
@@ -268,8 +285,11 @@ def main():
                 print(f"| {line_rollout_time:<{content_width-1}}|")
                 print(f"| {line_value_loss:<{content_width-1}}|")
                 print(f"| {line_policy_loss:<{content_width-1}}|")
+                print(f"| {line_flow_mean:<{content_width-1}}|")
                 print(f"| {line_episode_step:<{content_width-1}}|")
                 print(f"|________________________________________________________________|")
+
+                start_time = end_time
 
             # Checkpoint save
             if (timestep % checkpoint_interval == 0) and log_dir is not None:
