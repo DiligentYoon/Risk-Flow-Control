@@ -17,7 +17,7 @@ from ..R1_base_env_cfg import R1BaseEnvCfg
 @configclass
 class R1InterventionEnvCfg(R1BaseEnvCfg):
     ## ==================== Environment parameters ==================== ##
-    episode_length_s = 8.0
+    episode_length_s = 4.0
     sim_dt = 0.005
     decimation = 4
 
@@ -68,6 +68,10 @@ class R1InterventionEnvCfg(R1BaseEnvCfg):
             lin_vel_y=(0.0, 0.0),
             ang_vel_z=(-1.0, 1.0),
         ),
+    )
+
+    current_vel_visualizer_cfg: VisualizationMarkersCfg = BLUE_ARROW_X_MARKER_CFG.replace(
+        prim_path="/Visuals/Command/velocity_current"
     )
 
     def __post_init__(self):

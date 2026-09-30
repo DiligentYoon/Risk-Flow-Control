@@ -8,19 +8,19 @@ buffer:
 
 agent:
   class: RiskFlow
-  horizon: 200
+  horizon: 100
   batch_size: 4096
   learning_starts: 64
   grad_norm_clip: 1.0
 
-  exploration_sigma: 0.1
+  exploration_sigma: 0.05
 
   critic_learning_rate: 5.0e-05
-  target_update_tau: 0.005
+  target_update_tau: 0.01
   actor_learning_rate: 5.0e-05
   control_cost_scale: 1.0e-03
 
-  update_actor: false
+  update_actor: true
   update_dual: false
   dual_learning_rate: 1.0e-03
   terminal_risk_threshold: 0.0

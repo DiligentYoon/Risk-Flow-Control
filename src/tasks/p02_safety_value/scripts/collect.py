@@ -86,7 +86,7 @@ def main():
     # specify directory for logging experiments (load checkpoint)
     if args_cli.checkpoint is not None:
         base_dir = os.path.dirname(os.path.abspath(args_cli.checkpoint))
-        log_dir  = os.path.join(base_dir, "Predictor", "Dataset")
+        log_dir  = os.path.join(base_dir, "Predictor")
         log_dir  = os.path.join(log_dir, datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
         dataset_path = os.path.join(log_dir, "data_raw.hdf5")
     else:

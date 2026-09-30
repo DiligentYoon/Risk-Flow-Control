@@ -6,7 +6,7 @@ import copy
 import isaaclab.sim as sim_utils
 from isaaclab.terrains import TerrainImporter
 from isaaclab.markers import VisualizationMarkers
-from isaaclab.utils.math import euler_xyz_from_quat, quat_apply
+from isaaclab.utils.math import euler_xyz_from_quat, quat_apply, quat_mul, quat_from_euler_xyz
 
 from ..R1_base_env import R1BaseEnv
 from .R1_intervention_env_cfg import R1InterventionEnvCfg, R1InterventionPlayEnvCfg
@@ -49,10 +49,35 @@ class R1InterventionEnv(R1BaseEnv):
         self.set_debug_vis(debug_vis)
 
     def _set_debug_vis_impl(self, debug_vis: bool):
-        pass
+        if debug_vis:
+            if not hasattr(self, "current_vel_visualizer"):
+                self.current_vel_visualizer = VisualizationMarkers(self.cfg.current_vel_visualizer_cfg)
+            self.current_vel_visualizer.set_visibility(True)
+        else:
+            if hasattr(self, "current_vel_visualizer"):
+                self.current_vel_visualizer.set_visibility(False)
 
     def _debug_vis_callback(self, event):
-        pass
+        if not self._robot.is_initialized:
+            return
+
+        base_pos_w = self._robot.data.root_pos_w.clone()
+        base_pos_w[:, 2] += 0.6
+
+        # arrow-scale
+        default_scale = self.current_vel_visualizer.cfg.markers["arrow"].scale
+        xy_velocity = self._robot.data.root_lin_vel_b[:, :2]
+        vel_arrow_scale = torch.tensor(default_scale, device=self.device).repeat(xy_velocity.shape[0], 1)
+        vel_arrow_scale[:, 0] *= torch.clip(torch.linalg.norm(xy_velocity, dim=1), min=1e-3) * 3.0
+        # arrow-direction
+        heading_angle = torch.atan2(xy_velocity[:, 1], xy_velocity[:, 0])
+        zeros = torch.zeros_like(heading_angle)
+        vel_arrow_quat = quat_from_euler_xyz(zeros, zeros, heading_angle) # body frame
+        # convert everything back from base to world frame
+        base_quat_w = self._robot.data.root_quat_w
+        vel_arrow_quat = quat_mul(base_quat_w, vel_arrow_quat) # arrow rot in body frame -> world frame
+
+        self.current_vel_visualizer.visualize(base_pos_w[:1], vel_arrow_quat[:1], vel_arrow_scale[:1])
 
     def _setup_scene(self):
         super()._setup_scene()

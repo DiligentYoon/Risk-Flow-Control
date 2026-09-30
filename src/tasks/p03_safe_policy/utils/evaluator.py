@@ -220,6 +220,45 @@ class RolloutEvaluator:
             "num_truncated": self.num_truncated,
         }
 
+    def compute_trust_horizon_metrics(self) -> dict[str, torch.Tensor]:
+        max_length = max(len(episode["values"]) for episode in self.episodes)
+
+        value_error_sum = torch.zeros(max_length, dtype=torch.float64)
+        value_count = torch.zeros(max_length, dtype=torch.float64)
+        risk_miss_count = torch.zeros(max_length, dtype=torch.float64)
+        unsafe_count = torch.zeros(max_length, dtype=torch.float64)
+
+        for episode in self.episodes:
+            g = episode["g_values"]
+            value = episode["values"]
+            empirical = episode["discounted_empirical_values"]
+            length = len(value)
+
+            value_error_sum[:length] += torch.abs(value - empirical).double()
+            value_count[:length] += 1
+
+            unsafe = g > self.threshold
+            risk_miss = unsafe & (value <= self.threshold)
+
+            risk_miss_count[:length] += risk_miss.double()
+            unsafe_count[:length] += unsafe.double()
+
+        value_mae = torch.full((max_length,), float("nan"), dtype=torch.float64)
+        risk_miss_rate = torch.full((max_length,), float("nan"), dtype=torch.float64)
+
+        valid_value = value_count > 0
+        valid_risk = unsafe_count > 0
+
+        value_mae[valid_value] = value_error_sum[valid_value] / value_count[valid_value]
+        risk_miss_rate[valid_risk] = risk_miss_count[valid_risk] / unsafe_count[valid_risk]
+
+        return {
+            "value_mae": value_mae,
+            "risk_miss_rate": risk_miss_rate,
+            "sample_count": value_count,
+            "unsafe_count": unsafe_count,
+        }
+
     def compute_horizon_metrics(self) -> dict[str, torch.Tensor]:
         mae_sum = torch.zeros(self.horizon, dtype=torch.float64)
         mae_count = torch.zeros(self.horizon, dtype=torch.float64)
@@ -326,6 +365,33 @@ class RolloutEvaluator:
         axes[1].set_ylim(0.0, 1.0)
         axes[1].set_xlabel("Prediction horizon [s]")
         axes[1].set_ylabel("Direction accuracy")
+        axes[1].grid(True, alpha=0.3)
+
+        fig.tight_layout()
+        fig.savefig(file_path, dpi=200, bbox_inches="tight")
+        plt.close(fig)
+
+    def save_trust_horizon_plot(self, file_path: str, step_dt: float) -> None:
+        import matplotlib.pyplot as plt
+
+        metrics = self.compute_trust_horizon_metrics()
+
+        value_mae = metrics["value_mae"].numpy()
+        risk_miss_rate = metrics["risk_miss_rate"].numpy()
+        unsafe_count = metrics["unsafe_count"].numpy()
+
+        time_axis = np.arange(len(value_mae)) * step_dt
+
+        fig, axes = plt.subplots(2, 1, figsize=(14, 8), sharex=True)
+
+        axes[0].plot(time_axis, risk_miss_rate)
+        axes[0].set_ylim(0.0, 1.0)
+        axes[0].set_ylabel("Current risk miss rate")
+        axes[0].grid(True, alpha=0.3)
+
+        axes[1].plot(time_axis, value_mae)
+        axes[1].set_xlabel("Intervention elapsed time [s]")
+        axes[1].set_ylabel("Value MAE")
         axes[1].grid(True, alpha=0.3)
 
         fig.tight_layout()

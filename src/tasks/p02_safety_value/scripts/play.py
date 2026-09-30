@@ -79,10 +79,20 @@ def main() -> None:
 
     predictor_checkpoint = os.path.abspath(args_cli.predictor_checkpoint)
     log_dir = os.path.dirname(predictor_checkpoint)
-    os.makedirs(log_dir, exist_ok=True)
 
     # ============================= Environment ============================= #
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
+
+    if args_cli.video:
+        video_kwargs = {
+            "video_folder": os.path.join(log_dir, "videos"),
+            "step_trigger": lambda step: step == 0,
+            "video_length": args_cli.video_length,
+            "disable_logger": True,
+        }
+        print("[INFO] Recording video during evaluation.")
+        env = SafetyEnvRecordVideo(env, **video_kwargs)
+
     env = SafetyEnvWrapper(env)
 
     # ============================= Nominal Buffer ============================= #

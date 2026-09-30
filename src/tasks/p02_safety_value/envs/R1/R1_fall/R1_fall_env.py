@@ -113,8 +113,8 @@ class R1FallEnv(R1BaseEnv):
             xy_velocity=self._robot.data.root_lin_vel_b[:, :2],
         )
 
-        self.goal_vel_visualizer.visualize(base_pos_w, vel_des_arrow_quat, vel_des_arrow_scale)
-        self.current_vel_visualizer.visualize(base_pos_w, vel_arrow_quat, vel_arrow_scale)
+        self.goal_vel_visualizer.visualize(base_pos_w[:1], vel_des_arrow_quat[:1], vel_des_arrow_scale[:1])
+        self.current_vel_visualizer.visualize(base_pos_w[:1], vel_arrow_quat[:1], vel_arrow_scale[:1])
 
     def _setup_scene(self):
         super()._setup_scene()

@@ -9,13 +9,13 @@ from isaaclab.app import AppLauncher
 parser = argparse.ArgumentParser(description="Evaluate a trained Risk-Flow intervention policy.")
 parser.add_argument("--seed", type=int, default=None, help="Seed of RL environment")
 parser.add_argument("--video", action="store_true", default=False, help="Record videos during evaluation.")
-parser.add_argument("--video_length", type=int, default=1000, help="Length of evaluation rollout in steps.")
+parser.add_argument("--video_length", type=int, default=500, help="Length of evaluation rollout in steps.")
 parser.add_argument("--disable_fabric", type=bool, default=False, help="Disable fabric and use USD I/O operations.")
-parser.add_argument("--num_envs", type=int, default=64, help="Number of environments to simulate.")
+parser.add_argument("--num_envs", type=int, default=32, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default="R1-intervention-play", help="Name of the task.")
-parser.add_argument("--checkpoint", type=str, default="/home/aisl/Repos/Risk-Flow-Control/logs/r1_loco/1/Predictor/Dataset/2026-09-22_21-35-02/2026-09-23_15-49-29/intervention_policy/2026-09-29_13-26-12/agent_19200.pt", help="Path to Risk-Flow checkpoint.")
-parser.add_argument("--predictor_checkpoint", type=str, default="/home/aisl/Repos/Risk-Flow-Control/logs/r1_loco/1/Predictor/Dataset/2026-09-22_21-35-02/2026-09-23_15-49-29/agent_9999.pt", help="Path to safety value network checkpoint.")
-parser.add_argument("--initial_dataset", type=str, default="/home/aisl/Repos/Risk-Flow-Control/logs/r1_loco/1/Predictor/Dataset/2026-09-22_21-35-02/2026-09-23_15-49-29/collected/risk_init_dataset.pt", help="Path to Risk Initial dataset.")
+parser.add_argument("--checkpoint", type=str, default=None, help="Path to Risk-Flow checkpoint.")
+parser.add_argument("--predictor_checkpoint", type=str, default=None, help="Path to safety value network checkpoint.")
+parser.add_argument("--initial_dataset", type=str, default=None, help="Path to Risk Initial dataset.")
 parser.add_argument("--model", type=str, default="MLP", choices=["MLP", "Shared"], help="The NN model used for training the agent.")
 
 AppLauncher.add_app_launcher_args(parser)
@@ -221,6 +221,7 @@ def main():
 
     # ============================= Final Result =============================
     metrics = evaluator.compute()
+    trust_metrics = evaluator.compute_trust_horizon_metrics()
 
     print("\n================ Evaluation Result ================")
     print(f"Delta Mean              : {metrics['delta_mean']:.6f}")
@@ -232,6 +233,14 @@ def main():
     print(f"Num Episodes            : {metrics['num_episodes']}")
     print(f"Num Terminated          : {metrics['num_terminated']}")
     print(f"Num Truncated           : {metrics['num_truncated']}")
+    for step in [0, 5, 10, 20, 50]:
+        if step < len(trust_metrics["risk_miss_rate"]):
+            print(
+                f"[Trust] Step {step:3d} | "
+                f"Miss Rate {trust_metrics['risk_miss_rate'][step]:.4f} | "
+                f"Value MAE {trust_metrics['value_mae'][step]:.4f} | "
+                f"Unsafe Samples {int(trust_metrics['unsafe_count'][step].item())}"
+            )
     print("===================================================")
 
     if evaluator.num_episodes > 0:
@@ -242,6 +251,7 @@ def main():
 
         evaluator.save_timeseries_plot(file_path=os.path.join(plot_dir, "value_trajectory.png"), step_dt=step_dt)
         evaluator.save_horizon_metrics_plot(file_path=os.path.join(plot_dir, "flow_trajectory.png"), step_dt=step_dt)
+        evaluator.save_trust_horizon_plot(file_path=os.path.join(plot_dir, "trust_trajectory.png"), step_dt=step_dt)
 
         print(f"[INFO] Evaluation plots saved to: {log_dir}")
 
