@@ -20,17 +20,14 @@ class ReplayBuffer(Buffer):
     def init_buffer(
         self,
         observation_space: gymnasium.Space,
-        state_space: gymnasium.Space | None,
+        state_space: gymnasium.Space,
         safety_state_space: gymnasium.Space,
         action_space: gymnasium.Space,
     ) -> None:
         self.create_tensor("observations", observation_space, dtype=torch.float32)
         self.create_tensor("next_observations", observation_space, dtype=torch.float32)
-        if state_space is not None:
-            self.create_tensor("states", state_space, dtype=torch.float32)
-            self.create_tensor("next_states", state_space, dtype=torch.float32)
-        self.create_tensor("safety_states", safety_state_space, dtype=torch.float32)
-        self.create_tensor("next_safety_states", safety_state_space, dtype=torch.float32)
+        self.create_tensor("states", state_space, dtype=torch.float32)
+        self.create_tensor("next_states", state_space, dtype=torch.float32)
         self.create_tensor("safety_values", 1, dtype=torch.float32)
         self.create_tensor("next_safety_values", 1, dtype=torch.float32)
         self.create_tensor("actions", action_space, dtype=torch.float32)
@@ -44,34 +41,28 @@ class ReplayBuffer(Buffer):
     def add_samples(
         self,
         observations: torch.Tensor,
-        safety_states: torch.Tensor,
+        states: torch.Tensor,
         safety_values: torch.Tensor,
-        actions: torch.Tensor,
         next_observations: torch.Tensor,
-        next_safety_states: torch.Tensor,
+        next_states: torch.Tensor,
         next_safety_values: torch.Tensor,
+        actions: torch.Tensor,
         rewards: torch.Tensor,
         terminated: torch.Tensor,
         truncated: torch.Tensor,
-        states: torch.Tensor | None = None,
-        next_states: torch.Tensor | None = None,
     ) -> None:
         samples = {
             "observations": observations,
-            "safety_states": safety_states,
+            "states": states,
             "safety_values": self._ensure_column(safety_values),
             "actions": actions,
             "next_observations": next_observations,
-            "next_safety_states": next_safety_states,
+            "next_states": next_states,
             "next_safety_values": self._ensure_column(next_safety_values),
             "rewards": self._ensure_column(rewards),
             "terminated": self._ensure_column(terminated),
             "truncated": self._ensure_column(truncated),
         }
-        if states is not None and "states" in self.tensors:
-            samples["states"] = states
-        if next_states is not None and "next_states" in self.tensors:
-            samples["next_states"] = next_states
         super().add_samples(**samples)
 
     def sample(self, names: Tuple[str], mini_batches: int = 1) -> List[List[torch.Tensor]]:
