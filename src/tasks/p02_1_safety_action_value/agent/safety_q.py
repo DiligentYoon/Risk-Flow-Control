@@ -13,7 +13,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from lib.agent.agent import Agent
-from tasks.p02_1_safety_action_value.buffer.replaybuffer import ReplayBuffer
+from tasks.p02_1_safety_action_value.buffer.replay_buffer import ReplayBuffer
 from tasks.p02_1_safety_action_value.utils.scheduler import StepScheduler
 
 
@@ -180,8 +180,11 @@ class SafetyQ(Agent):
 
     def _update_actor(self, observations: torch.Tensor, states: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         actions, log_prob = self.actor(observations, deterministic=False, update_rms=True)
-        with self.critic.no_grad():
-            q1, q2 = self.critic(states, actions, update_rms=False)
+
+        for parameter in self.critic.parameters():
+            parameter.requires_grad_(False)
+
+        q1, q2 = self.critic(states, actions, update_rms=False)
         q = torch.maximum(q1, q2)
         entropy_loss = log_prob.mean()
         actor_loss = q.mean() + self.alpha * entropy_loss
@@ -195,6 +198,9 @@ class SafetyQ(Agent):
             self.alpha_optimizer.zero_grad()
             alpha_loss.backward()
             self.alpha_optimizer.step()
+
+        for parameter in self.critic.parameters():
+            parameter.requires_grad_(True)
 
         return actor_loss.detach(), entropy_loss.detach(), alpha_loss.detach()
 

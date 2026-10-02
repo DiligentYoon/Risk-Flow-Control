@@ -111,7 +111,7 @@ class InterventionEnv(Env):
                 self.event_manager.apply(mode="interval", dt=self.step_dt)
 
         # update observations
-        self.obs_buf = self._apply_observation_noise(self._get_observations())
+        self.obs_buf = self._get_observations()
         self.state_buf = self._get_states()
         self.safety_value_buf = self._get_safety_values()
 
@@ -151,7 +151,7 @@ class InterventionEnv(Env):
         raise NotImplementedError(f"Please implement the '_get_safety_values' method for {self.__class__.__name__}.")
 
     def _capture_final_states(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        final_obs_buf = self._apply_observation_noise(self._get_observations())
+        final_obs_buf = self._get_observations()
         final_states_buf = self._get_states()
         final_safety_value_buf = self._get_safety_values()
 

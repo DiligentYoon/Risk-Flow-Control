@@ -21,7 +21,6 @@ class ReplayBuffer(Buffer):
         self,
         observation_space: gymnasium.Space,
         state_space: gymnasium.Space,
-        safety_state_space: gymnasium.Space,
         action_space: gymnasium.Space,
     ) -> None:
         self.create_tensor("observations", observation_space, dtype=torch.float32)

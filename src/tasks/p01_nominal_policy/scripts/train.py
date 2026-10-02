@@ -293,8 +293,8 @@ def main():
                               infos=infos)
         
         # Parameter update
-        if timestep % buffer.buffer_size == 0:
-            if buffer.memory_index == 0:
+        if timestep % agent.buffer.buffer_size == 0:
+            if agent.buffer.memory_index == 0:
                 t2_rollout = time.time()
 
                 t1_update = time.time()
@@ -376,7 +376,7 @@ def main():
             tracking_data.clear()
 
         # CLI Logging about the training process at each parameter update
-        if timestep % buffer.buffer_size == 0 and buffer.memory_index == 0:
+        if timestep % agent.buffer.buffer_size == 0 and agent.buffer.memory_index == 0:
             per_step_reward = float(np.mean(CLI_step_reward_means)) if len(CLI_step_reward_means) else float("nan")
             avg_ep_step = float(np.mean(CLI_track_timesteps)) if len(CLI_track_timesteps) else float("nan")
             avg_ep_reward = float(np.mean(CLI_track_rewards)) if len(CLI_track_rewards) else float("nan")
