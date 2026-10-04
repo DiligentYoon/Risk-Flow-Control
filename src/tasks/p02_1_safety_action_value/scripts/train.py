@@ -268,9 +268,9 @@ def main():
                 update_info = agent.update()
 
             # Update Scheduler
-            rho_scheduler.step(env.num_envs)
-            epsilon_scheduler.step(env.num_envs)
-            agent.step_gamma(env.num_envs)
+            rho_scheduler.step(timestep)
+            epsilon_scheduler.step(timestep)
+            agent.step_gamma(timestep)
 
             tracking_data["Safety / value mean"].append(safety_values.mean().item())
             tracking_data["Safety / next value mean"].append(final_safety_values.mean().item())

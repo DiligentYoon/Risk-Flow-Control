@@ -203,8 +203,3 @@ class SafetyQ(Agent):
             parameter.requires_grad_(True)
 
         return actor_loss.detach(), entropy_loss.detach(), alpha_loss.detach()
-
-    def load(self, path: str) -> None:
-        super().load(path)
-        if self.gamma_scheduler is not None:
-            self.discount_factor = self.gamma_scheduler.get()

@@ -17,7 +17,7 @@ agent:
   discount_factor: 0.8
   gamma_schedule:
     enabled: true
-    period: 25000
+    period: 3000
     decay: 0.5
     end_value: 0.999
     goal_value: 1.0
@@ -33,13 +33,13 @@ agent:
 
   rho_schedule:
     init_value: 1.0
-    period: 25000
+    period: 3000
     decay: 0.5
     end_value: 0.0
 
   epsilon_schedule:
     init_value: 0.0
-    period: 50000
+    period: 6000
     decay: 0.5
     end_value: 1.0
     goal_value: 1.0

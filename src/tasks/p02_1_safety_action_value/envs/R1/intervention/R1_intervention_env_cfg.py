@@ -17,7 +17,7 @@ from ..R1_base_env_cfg import R1BaseEnvCfg
 @configclass
 class R1InterventionEnvCfg(R1BaseEnvCfg):
     ## ==================== Environment parameters ==================== ##
-    episode_length_s = 4.0
+    episode_length_s = 12.0
     sim_dt = 0.005
     decimation = 4
 
@@ -32,8 +32,8 @@ class R1InterventionEnvCfg(R1BaseEnvCfg):
 
     ## ========== Single Agent Setting ========== ##
     action_space = 26
-    observation_space = 87
-    state_space = 87
+    observation_space = 92
+    state_space = 92
     num_agents = 1
     action_scale_factor = 0.5
 
@@ -73,6 +73,7 @@ class R1InterventionEnvCfg(R1BaseEnvCfg):
 
     def __post_init__(self):
         super().__post_init__()
+
 
 # Environment for eveluating Reach-avoid network
 @configclass
