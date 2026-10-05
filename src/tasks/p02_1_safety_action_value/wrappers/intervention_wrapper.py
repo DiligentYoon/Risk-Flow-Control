@@ -20,14 +20,27 @@ class InterventionEnvWrapper(IsaacLabWrapper):
         self._final_observations = None
         self._final_states = None
 
-    def step(self, actions: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, Any]:
+    def step(self, actions: torch.Tensor) -> Tuple[torch.Tensor, 
+                                                   torch.Tensor, 
+                                                   torch.Tensor, 
+                                                   torch.Tensor, 
+                                                   torch.Tensor, 
+                                                   torch.Tensor, 
+                                                   torch.Tensor, 
+                                                   torch.Tensor, 
+                                                   torch.Tensor, 
+                                                   torch.Tensor, 
+                                                   torch.Tensor, 
+                                                   Any]:
         actions = unflatten_tensorized_space(self.action_space, actions)
         (
             observations,
             states,
+            reach_values,
             safety_values,
             final_observations,
             final_states,
+            final_reach_values,
             final_safety_values,
             reward,
             terminated,
@@ -45,9 +58,11 @@ class InterventionEnvWrapper(IsaacLabWrapper):
         return (
             self._observations,
             self._states,
+            reach_values.reshape(-1, 1),
             safety_values.reshape(-1, 1),
             self._final_observations,
             self._final_states,
+            final_reach_values.reshape(-1, 1),
             final_safety_values.reshape(-1, 1),
             reward.reshape(-1, 1),
             terminated.reshape(-1, 1),
@@ -55,20 +70,19 @@ class InterventionEnvWrapper(IsaacLabWrapper):
             self._info,
         )
 
-    def reset(self) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Any]:
+    def reset(self) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, Any]:
         if self._reset_once:
-            observations, states, safety_values, self._info = self._env.reset()
+            observations, states, reach_values, safety_values, self._info = self._env.reset()
             self._observations = flatten_tensorized_space(tensorize_space(self.observation_space, observations))
             if states is not None:
                 self._states = flatten_tensorized_space(tensorize_space(self.state_space, states))
-            self._safety_values = safety_values.reshape(-1, 1)
             self._reset_once = False
-        return self._observations, self._states, self._safety_values, self._info
+        return self._observations, self._states, reach_values.reshape(-1, 1), safety_values.reshape(-1, 1), self._info
 
 
 class InterventionEnvRecordVideo(RecordVideo):
     def reset(self, *, seed=None, options=None):
-        observations, states, safety_values, info = self.env.reset(seed=seed, options=options)
+        observations, states, reach_values, safety_values, info = self.env.reset(seed=seed, options=options)
         self.episode_id += 1
 
         if self.recording and self.video_length == float("inf"):
@@ -80,15 +94,17 @@ class InterventionEnvRecordVideo(RecordVideo):
             if len(self.recorded_frames) > self.video_length:
                 self.stop_recording()
 
-        return observations, states, safety_values, info
+        return observations, states, reach_values, safety_values, info
 
     def step(self, action):
         (
             observations,
             states,
+            reach_values,
             safety_values,
             final_observations,
             final_states,
+            final_reach_values,
             final_safety_values,
             reward,
             terminated,
@@ -104,4 +120,4 @@ class InterventionEnvRecordVideo(RecordVideo):
             if len(self.recorded_frames) > self.video_length:
                 self.stop_recording()
 
-        return observations, states, safety_values, final_observations, final_states, final_safety_values, reward, terminated, truncated, info
+        return observations, states, reach_values, safety_values, final_observations, final_states, final_reach_values, final_safety_values, reward, terminated, truncated, info

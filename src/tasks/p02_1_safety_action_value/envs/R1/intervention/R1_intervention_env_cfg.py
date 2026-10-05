@@ -35,14 +35,22 @@ class R1InterventionEnvCfg(R1BaseEnvCfg):
     observation_space = 92
     state_space = 92
     num_agents = 1
-    action_scale_factor = 0.5
+    action_scale_factor = 3.0
 
     # ===== Gait guidance ===== #
-    time_period = 0.35
+    time_period = 0.45
 
     termination_height  = 0.35
-    termination_ang_vel = 20.0
-    phi_max = 3.14/4
+    target_height = 0.73
+    target_tilt = 10 * 3.14 / 180
+
+    lin_vel_thr = 0.1
+    ang_vel_thr = 1.0
+    joint_dev_thr = 5.0 * 3.14 / 180
+    phi_thr = 3.14/4
+
+    lin_vel_max = 1.0
+    ang_vel_max = 4.0
 
     ## ============== Self collision =============== ##
     allowed_collision_bodies = [

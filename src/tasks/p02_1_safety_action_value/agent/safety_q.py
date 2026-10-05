@@ -37,6 +37,7 @@ class SafetyQ(Agent):
         self.target_tau = self.cfg["tau"]
         self.update_period = self.cfg.get("update_period", 1)
         self.target_entropy = -self.actor.num_actions
+        self.learn_alpha = self.cfg.get("learn_alpha", False)
         self.update_counter = 0
 
         gamma_cfg = self.cfg.get("gamma_schedule", {})
@@ -55,7 +56,10 @@ class SafetyQ(Agent):
         self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=self.cfg["critic_learning_rate"])
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=self.cfg["actor_learning_rate"])
         self.log_alpha = nn.ParameterDict({"value": nn.Parameter(torch.tensor(float(self.cfg["alpha"]), device=self.device).log(), requires_grad=True)})
-        self.alpha_optimizer = torch.optim.Adam(self.log_alpha.parameters(), lr=self.cfg["alpha_learning_rate"])
+        self.alpha_optimizer = None
+        if self.learn_alpha:
+            self.alpha_optimizer = torch.optim.Adam(self.log_alpha.parameters(), lr=self.cfg["alpha_learning_rate"])
+
 
         self.checkpoint_modules.update({
             "actor": self.actor,
@@ -64,8 +68,9 @@ class SafetyQ(Agent):
             "critic_optimizer": self.critic_optimizer,
             "actor_optimizer": self.actor_optimizer,
             "log_alpha": self.log_alpha,
-            "alpha_optimizer": self.alpha_optimizer,
         })
+        if self.learn_alpha:
+            self.checkpoint_modules["alpha_optimizer"] = self.alpha_optimizer
         if self.gamma_scheduler is not None:
             self.checkpoint_modules["gamma_scheduler"] = self.gamma_scheduler
 
@@ -74,6 +79,7 @@ class SafetyQ(Agent):
             "states",
             "next_observations",
             "next_states",
+            "next_reach_values",
             "next_safety_values",
             "actions",
             "terminated",
@@ -105,6 +111,7 @@ class SafetyQ(Agent):
         self,
         next_observations: torch.Tensor,
         next_states: torch.Tensor,
+        next_reach_values: torch.Tensor,
         next_safety_values: torch.Tensor,
         terminated: torch.Tensor,
         truncated: torch.Tensor,
@@ -112,8 +119,12 @@ class SafetyQ(Agent):
         next_actions, _ = self.actor(next_observations, deterministic=False, update_rms=False)
         next_q1, next_q2 = self.target_critic(next_states, next_actions, update_rms=False)
         next_q = torch.maximum(next_q1, next_q2)
-        target = (1.0 - self.discount_factor) * next_safety_values + self.discount_factor * torch.maximum(next_safety_values, next_q)
-        return torch.where(terminated | truncated, next_safety_values, target)
+
+        reach_avoid = torch.maximum(torch.minimum(next_reach_values, next_q), next_safety_values)
+        target = (1.0 - self.discount_factor) * torch.maximum(next_reach_values, next_safety_values) + self.discount_factor * reach_avoid
+        return torch.where(terminated | truncated, next_safety_values, target) # no bootstrapping at termination and truncation.
+        # target = (1.0 - self.discount_factor) * next_safety_values + self.discount_factor * torch.maximum(next_safety_values, next_q)
+        # return torch.where(terminated | truncated, next_safety_values, target)
 
     @torch.no_grad()
     def step_gamma(self, steps: int = 1) -> float:
@@ -138,12 +149,13 @@ class SafetyQ(Agent):
             states,
             next_observations, 
             next_states,
+            next_reach_values,
             next_safety_values, 
             actions, 
             terminated, truncated
         ) = self.buffer.sample_batch(self.tensors_names, self.batch_size)
 
-        target = self.compute_target(next_observations, next_states, next_safety_values, terminated, truncated)
+        target = self.compute_target(next_observations, next_states, next_reach_values, next_safety_values, terminated, truncated)
         q1, q2 = self.critic(states, actions, update_rms=True)
         loss_q1 = F.mse_loss(q1, target)
         loss_q2 = F.mse_loss(q2, target)

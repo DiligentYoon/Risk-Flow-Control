@@ -21,9 +21,9 @@ parser = argparse.ArgumentParser(description="Train a Safety-Q shielding policy.
 parser.add_argument("--seed", type=int, default=None, help="Seed of RL environment")
 parser.add_argument("--video", action="store_true", default=False, help="Record videos during training.")
 parser.add_argument("--video_length", type=int, default=500, help="Length of the recorded video (in steps).")
-parser.add_argument("--video_interval", type=int, default=2000, help="Interval between video recordings (in steps).")
+parser.add_argument("--video_interval", type=int, default=500, help="Interval between video recordings (in steps).")
 parser.add_argument("--disable_fabric", type=bool, default=False, help="Disable fabric and use USD I/O operations.")
-parser.add_argument("--num_envs", type=int, default=5, help="Number of environments to simulate.")
+parser.add_argument("--num_envs", type=int, default=4096, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default="R1-intervention", help="Name of the task.")
 parser.add_argument("--checkpoint", type=str, default=None, help="Path to Safety-Q checkpoint.")
 parser.add_argument("--nominal_checkpoint", type=str, default=None, help="Path to frozen nominal PPO checkpoint.")
@@ -184,6 +184,7 @@ def main():
     rho_cfg = cfg["agent"]["rho_schedule"]
     epsilon_cfg = cfg["agent"]["epsilon_schedule"]
 
+    # rho : whether use backup policy actions for shielding check or not (1 -> 0)
     rho_scheduler = StepScheduler(
         init_value=rho_cfg["init_value"],
         period=rho_cfg["period"],
@@ -191,6 +192,7 @@ def main():
         end_value=rho_cfg["end_value"],
         goal_value=rho_cfg.get("goal_value", None),
     )
+    # epsilon : whether use safety filtering or not (0 -> 1)
     epsilon_scheduler = StepScheduler(
         init_value=epsilon_cfg["init_value"],
         period=epsilon_cfg["period"],
@@ -204,9 +206,15 @@ def main():
     tracking_data = collections.defaultdict(list)
     tracking_timesteps = collections.deque(maxlen=env.num_envs)
     CLI_track_timesteps = collections.deque(maxlen=env.num_envs)
+    CLI_track_q_term = collections.deque(maxlen=env.num_envs)
+    CLI_track_g_term = collections.deque(maxlen=env.num_envs)
+    CLI_track_l_term = collections.deque(maxlen=env.num_envs)
+    CLI_track_q_term_min = collections.deque(maxlen=env.num_envs)
+    CLI_track_g_term_min = collections.deque(maxlen=env.num_envs)
+    CLI_track_l_term_min = collections.deque(maxlen=env.num_envs)
     cumulative_timesteps = torch.zeros((env.num_envs, 1), dtype=torch.int32, device=env.device)
 
-    obs, states, safety_values, infos = env.reset()
+    obs, states, reach_values, safety_values, infos = env.reset()
     timestep = 0
     logstep = 0
     elapsed_time = 0.0
@@ -216,32 +224,35 @@ def main():
     # ======================= Interaction ========================= #
     try:
         while simulation_app.is_running() and timestep < cfg["train"]["timesteps"]:
-            rho = rho_scheduler.get()
-            epsilon = epsilon_scheduler.get()
+            rho = 1.0
+            # epsilon = epsilon_scheduler.get()
+            epsilon = 1.0
 
             with torch.inference_mode():
-                nominal_actions, _, _ = nominal_agent.act(observations=obs, infos=infos, timestep=timestep, deterministic=True, update_rms=False)
+                # nominal_actions, _, _ = nominal_agent.act(observations=obs, infos=infos, timestep=timestep, deterministic=True, update_rms=False)
                 backup_actions = agent.act(observations=obs, deterministic=False)
                 # Action selection in Training Phase
-                use_backup = torch.rand((env.num_envs, 1), device=env.device) < rho
-                proposed_actions = torch.where(use_backup, backup_actions, nominal_actions)
+                # use_backup = torch.rand((env.num_envs, 1), device=env.device) < rho
+                # proposed_actions = torch.where(use_backup, backup_actions, 1/6*nominal_actions)
                 # Filtering decision in Training Phase
-                executed_actions = proposed_actions
+                executed_actions = backup_actions
                 shield_flag = torch.zeros((env.num_envs, 1), dtype=torch.bool, device=env.device)
-                if bool((torch.rand((), device=env.device) < epsilon).item()):
-                    # Filtering Logic
-                    shield_flag = agent.predict(states, proposed_actions) > cfg["agent"]["shield_threshold"]
-                    if torch.any(shield_flag):
-                        executed_actions = proposed_actions.clone()
-                        mask = shield_flag.squeeze(-1)
-                        executed_actions[mask] = agent.act(obs[mask], deterministic=True)
+                # if bool((torch.rand((), device=env.device) < epsilon).item()):
+                #     # Filtering Logic
+                #     shield_flag = agent.predict(states, proposed_actions) > cfg["agent"]["shield_threshold"]
+                #     if torch.any(shield_flag):
+                #         executed_actions = proposed_actions.clone()
+                #         mask = shield_flag.squeeze(-1)
+                #         executed_actions[mask] = agent.act(obs[mask], deterministic=True)
 
                 (
                     next_obs,
                     next_states,
+                    next_reach_values,
                     next_safety_values,
                     final_obs,
                     final_states,
+                    final_reach_values,
                     final_safety_values,
                     rewards,
                     terminated,
@@ -254,9 +265,11 @@ def main():
             agent.insert_data(
                 observations=obs,
                 states=states,
+                reach_values=reach_values,
                 safety_values=safety_values,
                 next_observations=final_obs,
                 next_states=final_states,
+                next_reach_values=final_reach_values,
                 next_safety_values=final_safety_values,
                 actions=executed_actions,
                 rewards=rewards,
@@ -282,8 +295,10 @@ def main():
                     tracking_data[f"Learning / {k}"].append(v)
 
             cumulative_timesteps.add_(1)
+
             done = (terminated | truncated).squeeze(-1)
             finished_episodes = done.nonzero(as_tuple=False).squeeze(-1)
+            terminated_episodes = terminated.squeeze(-1).nonzero(as_tuple=False).squeeze(-1)
             if finished_episodes.numel():
                 tracking_timesteps.extend(cumulative_timesteps[finished_episodes, 0].detach().cpu().tolist())
                 CLI_track_timesteps.extend(cumulative_timesteps[finished_episodes, 0].detach().cpu().tolist())
@@ -291,6 +306,20 @@ def main():
             if tracking_timesteps:
                 tracking_data["Episode / Total timesteps (mean)"].append(float(np.mean(tracking_timesteps)))
                 tracking_timesteps.clear()
+            if terminated_episodes.numel():
+                with torch.no_grad():
+                    q_term = agent.predict(states[terminated_episodes], executed_actions[terminated_episodes])
+                    g_term = final_safety_values[terminated_episodes]
+                    l_term = final_reach_values[terminated_episodes]
+                    q_term_min = q_term.min(dim=0).values
+                    g_term_min = g_term.min(dim=0).values
+                    l_term_min = l_term.min(dim=0).values
+                CLI_track_q_term.extend(q_term.detach().cpu().tolist())
+                CLI_track_g_term.extend(g_term.detach().cpu().tolist())
+                CLI_track_l_term.extend(l_term.detach().cpu().tolist())
+                CLI_track_q_term_min.extend(q_term_min.detach().cpu().tolist())
+                CLI_track_g_term_min.extend(g_term_min.detach().cpu().tolist())
+                CLI_track_l_term_min.extend(l_term_min.detach().cpu().tolist())
 
             if (timestep % write_interval == 0) and log_dir is not None:
                 for k, v in tracking_data.items():
@@ -307,7 +336,20 @@ def main():
             if timestep % CLI_interval == 0:
                 end_time = time.time()
                 avg_ep_step = float(np.mean(CLI_track_timesteps)) if CLI_track_timesteps else float("nan")
+                avg_q_term = float(np.mean(CLI_track_q_term)) if CLI_track_q_term else float("nan")
+                avg_g_term = float(np.mean(CLI_track_g_term)) if CLI_track_g_term else float("nan")
+                avg_l_term = float(np.mean(CLI_track_l_term)) if CLI_track_l_term else float("nan")
+                avg_q_term_min = float(np.mean(CLI_track_q_term_min)) if CLI_track_q_term_min else float("nan")
+                avg_g_term_min = float(np.mean(CLI_track_g_term_min)) if CLI_track_g_term_min else float("nan")
+                avg_l_term_min = float(np.mean(CLI_track_l_term_min)) if CLI_track_l_term_min else float("nan")
+
                 avg_ep_step_str = "-" if np.isnan(avg_ep_step) else f"{avg_ep_step:6.3f} steps"
+                avg_q_term_str = "-" if np.isnan(avg_q_term) else f"{avg_q_term:6.3f}"
+                avg_g_term_str = "-" if np.isnan(avg_g_term) else f"{avg_g_term:6.3f}"
+                avg_l_term_str = "-" if np.isnan(avg_l_term) else f"{avg_l_term:6.3f}"
+                avg_q_term_min_str = "-" if np.isnan(avg_q_term_min) else f"{avg_q_term_min:6.3f}"
+                avg_g_term_min_str = "-" if np.isnan(avg_g_term_min) else f"{avg_g_term_min:6.3f}"
+                avg_l_term_min_str = "-" if np.isnan(avg_l_term_min) else f"{avg_l_term_min:6.3f}"
                 critic_loss_str = "-" if update_info is None else f"{update_info['critic_loss']:8.5f}"
                 actor_loss_str = "-" if update_info is None else f"{update_info['actor_loss']:8.5f}"
                 alpha_str = "-" if update_info is None else f"{update_info['alpha']:7.4f}"
@@ -335,6 +377,12 @@ def main():
                     f"Gamma                   : {gamma_str}",
                     f"Rho / Epsilon           : {rho:6.3f} / {epsilon:6.3f}",
                     f"Shield Rate             : {shield_rate:6.3f}",
+                    f"Avg Q Termination       : {avg_q_term_str}",
+                    f"Avg g Termination       : {avg_g_term_str}",
+                    f"Avg l Termination       : {avg_l_term_str}",
+                    f"Min Q Termination       : {avg_q_term_min_str}",
+                    f"Min g Termination       : {avg_g_term_min_str}",
+                    f"Min l Termination       : {avg_l_term_min_str}",
                     f"Avg Episode Step        : {avg_ep_step_str}",
                 ]
 
@@ -349,6 +397,8 @@ def main():
                 print("|________________________________________________________________|")
 
                 CLI_track_timesteps.clear()
+                CLI_track_q_term.clear()
+                CLI_track_g_term.clear()
                 logstep += 1
                 start_time = end_time
 
@@ -357,11 +407,12 @@ def main():
 
             obs = next_obs
             states = next_states
+            reach_values = next_reach_values
             safety_values = next_safety_values
             infos = next_infos
 
     finally:
-        if log_dir is None:
+        if log_dir is not None:
             writer.close()
         env.close()
 

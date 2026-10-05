@@ -203,10 +203,34 @@ class R1InterventionEnv(R1BaseEnv):
     def _get_safety_values(self):
         # safety value
         base_tilt = (torch.atan2(torch.norm(self._robot.data.projected_gravity_b[:, :2], dim=-1), 
-                                 -self._robot.data.projected_gravity_b[:, 2]) - self.cfg.phi_max) / self.cfg.phi_max
-        base_height = (self.cfg.termination_height - self._robot.data.root_pos_w[:, 2]) / self.cfg.termination_height
+                                 -self._robot.data.projected_gravity_b[:, 2]) - self.cfg.phi_thr) / self.cfg.phi_thr
+        base_height = (self.cfg.termination_height - self._robot.data.root_pos_w[:, 2]) / 0.1
 
         return torch.max(base_tilt, base_height)
+
+    def _get_reach_values(self):
+        # target set value
+        base_ang_vel = torch.norm(self._robot.data.root_ang_vel_b, dim=-1)
+        base_lin_vel = torch.norm(self._robot.data.root_lin_vel_b, dim=-1)
+        base_tilt = torch.atan2(torch.norm(self._robot.data.projected_gravity_b[:, :2], dim=-1),-self._robot.data.projected_gravity_b[:, 2])
+        base_height = self._robot.data.root_pos_w[:, 2]
+        joint_delta = self._robot.data.joint_pos - self._robot.data.default_joint_pos
+        joint_deviation = torch.abs(joint_delta)
+
+        l_tilt = (base_tilt - self.cfg.target_tilt) / (self.cfg.phi_thr - self.cfg.target_tilt)
+        # l_height = (self.cfg.target_height - base_height) / (self.cfg.target_height - self.cfg.termination_height)
+
+        l_ang_vel = (base_ang_vel - self.cfg.ang_vel_thr) / self.cfg.ang_vel_max
+        # l_lin_vel = (base_lin_vel - self.cfg.lin_vel_thr) / self.cfg.lin_vel_max
+
+        # joint_dev_max = torch.where(joint_delta >= 0, 
+        #                             self._robot.data.soft_joint_pos_limits[:, :, 1] - self._robot.data.default_joint_pos, 
+        #                             self._robot.data.default_joint_pos - self._robot.data.soft_joint_pos_limits[:, :, 0])
+        # joint_dev_denom = (joint_dev_max - self.cfg.joint_dev_thr).clamp(min=1e-3)
+        # l_joint_dev = torch.max((joint_deviation - self.cfg.joint_dev_thr) / joint_dev_denom, dim=-1).values
+
+        return torch.stack([l_ang_vel], dim=-1).max(dim=-1).values
+
 
     def _get_rewards(self) -> torch.Tensor:
         if self.cfg.num_agents > 1:

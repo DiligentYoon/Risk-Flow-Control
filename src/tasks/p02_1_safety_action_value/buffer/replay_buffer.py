@@ -27,7 +27,9 @@ class ReplayBuffer(Buffer):
         self.create_tensor("next_observations", observation_space, dtype=torch.float32)
         self.create_tensor("states", state_space, dtype=torch.float32)
         self.create_tensor("next_states", state_space, dtype=torch.float32)
+        self.create_tensor("reach_values", 1, dtype=torch.float32)
         self.create_tensor("safety_values", 1, dtype=torch.float32)
+        self.create_tensor("next_reach_values", 1, dtype=torch.float32)
         self.create_tensor("next_safety_values", 1, dtype=torch.float32)
         self.create_tensor("actions", action_space, dtype=torch.float32)
         self.create_tensor("rewards", 1, dtype=torch.float32)
@@ -41,9 +43,11 @@ class ReplayBuffer(Buffer):
         self,
         observations: torch.Tensor,
         states: torch.Tensor,
+        reach_values: torch.Tensor,
         safety_values: torch.Tensor,
         next_observations: torch.Tensor,
         next_states: torch.Tensor,
+        next_reach_values: torch.Tensor,
         next_safety_values: torch.Tensor,
         actions: torch.Tensor,
         rewards: torch.Tensor,
@@ -53,10 +57,12 @@ class ReplayBuffer(Buffer):
         samples = {
             "observations": observations,
             "states": states,
+            "reach_values": self._ensure_column(reach_values),
             "safety_values": self._ensure_column(safety_values),
             "actions": actions,
             "next_observations": next_observations,
             "next_states": next_states,
+            "next_reach_values": self._ensure_column(next_reach_values),
             "next_safety_values": self._ensure_column(next_safety_values),
             "rewards": self._ensure_column(rewards),
             "terminated": self._ensure_column(terminated),

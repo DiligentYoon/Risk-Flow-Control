@@ -18,19 +18,19 @@ class R1LocoEnvCfg(R1BaseEnvCfg):
     decimation = 4
 
     ## ========== Multi Agent Setting =========== ##
-    possible_agents = ["arm", "leg"]
-    action_space = {"arm": 14, "leg": 12}
-    observation_space = {"arm": 56, "leg": 50}
-    state_space = {"arm": 93, "leg": 93}
-    num_agents = 2
-    action_scale_factor = {"arm": [0.5, ()],
-                           "leg": [0.5, ()]}
+    # possible_agents = ["arm", "leg"]
+    # action_space = {"arm": 14, "leg": 12}
+    # observation_space = {"arm": 56, "leg": 50}
+    # state_space = {"arm": 93, "leg": 93}
+    # num_agents = 2
+    # action_scale_factor = {"arm": [0.5, ()],
+    #                        "leg": [0.5, ()]}
 
     ## ========== Single Agent Setting ========== ##
-    # action_space = 26
-    # observation_space = 92
-    # num_agents = 1
-    # action_scale_factor = 0.5
+    action_space = 26
+    observation_space = 92
+    num_agents = 1
+    action_scale_factor = 0.5
 
     ## ==================== Reward Shaping ==================== ##
     r_track_lin_vel: float = 8.0
@@ -48,7 +48,7 @@ class R1LocoEnvCfg(R1BaseEnvCfg):
     p_joint_vel: float = 1.0e-4
 
     p_limits: float = 10.0
-    p_deviation_swing: float = 2.0
+    p_deviation_swing: float = 0.0
     p_deviation_hip: float = 2.0
     p_deviation_arm: float = 2.0
     p_action_rate: float = 1.0e-3

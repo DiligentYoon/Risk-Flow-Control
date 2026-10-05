@@ -17,7 +17,6 @@ class StepScheduler(nn.Module):
         self.decay = decay
         self.end_value = end_value
         self.goal_value = None if goal_value is None else goal_value
-        self.count = 0
         self.value = init_value
 
     @torch.no_grad()

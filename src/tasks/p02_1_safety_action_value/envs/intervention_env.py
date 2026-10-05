@@ -24,17 +24,30 @@ class InterventionEnv(Env):
 
     def reset(
         self, seed: int | None = None, options: dict[str, Any] | None = None
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, dict]:
         obs, states, extras = super().reset(seed=seed, options=options)
 
         self.safety_value_buf = self._get_safety_values()
+        self.reach_value_buf = self._get_reach_values()
 
-        return obs, states, self.safety_value_buf, extras
+        return obs, states, self.reach_value_buf, self.safety_value_buf, extras
 
 
     def step(
         self, action: Union[torch.Tensor, Dict[str, torch.Tensor]]
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, dict]:
+    ) -> tuple[torch.Tensor, 
+               torch.Tensor, 
+               torch.Tensor, 
+               torch.Tensor, 
+               torch.Tensor, 
+               torch.Tensor, 
+               torch.Tensor, 
+               torch.Tensor, 
+               torch.Tensor, 
+               torch.Tensor, 
+               torch.Tensor, 
+               torch.Tensor, 
+               dict]:
         """Execute one time-step and additionally return the safety-network input.
 
         Mirrors :meth:`Env.step`, with the pre-reset capture inserted between ``_get_rewards`` and
@@ -90,7 +103,7 @@ class InterventionEnv(Env):
         self.reward_buf = self._get_rewards()
 
         # capture the state that actually followed the action, before the same-step reset overwrites it for the terminated environments
-        final_obs_buf, final_states_buf, final_safety_value_buf = self._capture_final_states()
+        final_obs_buf, final_states_buf, final_reach_value_buf, final_safety_value_buf = self._capture_final_states()
 
         # -- reset envs that terminated/timed-out and log the episode information
         reset_env_ids = self.reset_buf.nonzero(as_tuple=False).squeeze(-1)
@@ -114,11 +127,13 @@ class InterventionEnv(Env):
         self.obs_buf = self._get_observations()
         self.state_buf = self._get_states()
         self.safety_value_buf = self._get_safety_values()
+        self.reach_value_buf = self._get_reach_values()
 
         # Next states masking
         final_obs_buf[~self.reset_buf] = self.obs_buf[~self.reset_buf]
         final_states_buf[~self.reset_buf] = self.state_buf[~self.reset_buf]
         final_safety_value_buf[~self.reset_buf] = self.safety_value_buf[~self.reset_buf]
+        final_reach_value_buf[~self.reset_buf] = self.reach_value_buf[~self.reset_buf]
 
         # update viz data
         if self.cfg.viz_data is not None:
@@ -130,9 +145,11 @@ class InterventionEnv(Env):
         return (
             self.obs_buf,               # NOTE: observations for nominal policy and safety value actor (policy network)
             self.state_buf,             # NOTE: states for safety value critic (value network)
+            self.reach_value_buf,       # NOTE: reach values for safety value critic (value network)
             self.safety_value_buf,      # NOTE: safety values for safety value critic (value network)
             final_obs_buf,
             final_states_buf,
+            final_reach_value_buf,
             final_safety_value_buf,
             self.reward_buf,
             self.reset_terminated,
@@ -150,12 +167,23 @@ class InterventionEnv(Env):
         """
         raise NotImplementedError(f"Please implement the '_get_safety_values' method for {self.__class__.__name__}.")
 
-    def _capture_final_states(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    @abstractmethod
+    def _get_reach_values(self) -> torch.Tensor:
+        """Compute and return the reach value.
+
+        Returns:
+            The reach values for the environment. Shape is
+            (num_envs, 1).
+        """
+        raise NotImplementedError(f"Please implement the '_get_reach_values' method for {self.__class__.__name__}.")
+
+    def _capture_final_states(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         final_obs_buf = self._get_observations()
         final_states_buf = self._get_states()
+        final_reach_value_buf = self._get_reach_values()
         final_safety_value_buf = self._get_safety_values()
 
-        return final_obs_buf, final_states_buf, final_safety_value_buf
+        return final_obs_buf, final_states_buf, final_reach_value_buf, final_safety_value_buf
 
     def _apply_observation_noise(self, obs: torch.Tensor) -> torch.Tensor:
         """Apply the configured noise model to the observations."""
