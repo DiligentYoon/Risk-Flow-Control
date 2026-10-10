@@ -119,12 +119,11 @@ class SafetyQ(Agent):
         next_actions, _ = self.actor(next_observations, deterministic=False, update_rms=False)
         next_q1, next_q2 = self.target_critic(next_states, next_actions, update_rms=False)
         next_q = torch.maximum(next_q1, next_q2)
-
         reach_avoid = torch.maximum(torch.minimum(next_reach_values, next_q), next_safety_values)
-        target = (1.0 - self.discount_factor) * torch.maximum(next_reach_values, next_safety_values) + self.discount_factor * reach_avoid
-        return torch.where(terminated, torch.maximum(next_reach_values, next_safety_values), target) # no bootstrapping at termination and truncation.
-        # target = (1.0 - self.discount_factor) * next_safety_values + self.discount_factor * torch.maximum(next_safety_values, next_q)
-        # return torch.where(terminated | truncated, next_safety_values, target)
+        # target = (1.0 - self.discount_factor) * torch.maximum(next_reach_values, next_safety_values) + self.discount_factor * reach_avoid
+        # return torch.where(terminated | truncated, torch.maximum(next_reach_values, next_safety_values), target) # no bootstrapping at termination and truncation.
+        target = (1.0 - self.discount_factor) * next_safety_values + self.discount_factor * torch.maximum(next_safety_values, next_q)
+        return torch.where(terminated | truncated, next_safety_values, target)
 
     @torch.no_grad()
     def step_gamma(self, steps: int = 1) -> float:

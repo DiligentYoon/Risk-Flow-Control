@@ -159,8 +159,8 @@ class R1InterventionEnv(R1BaseEnv):
         return observations
 
     def _get_states(self) -> dict[str, torch.Tensor]:
-        total_joint_ids = self.total_leg_joint_ids + self.total_arm_joint_ids
         if self.cfg.num_agents > 1:
+            total_joint_ids = self.total_leg_joint_ids + self.total_arm_joint_ids
             shared_states = torch.cat([
                 self._robot.data.root_pos_w[:, 2:],
                 self._robot.data.root_lin_vel_b,
@@ -186,8 +186,8 @@ class R1InterventionEnv(R1BaseEnv):
                 # self.commands.command_b,
                 # self.phase_sin.unsqueeze(-1),
                 # self.phase_cos.unsqueeze(-1),
-                self._robot.data.joint_pos[:, total_joint_ids] - self._robot.data.default_joint_pos[:, total_joint_ids],
-                self._robot.data.joint_vel[:, total_joint_ids],
+                self._robot.data.joint_pos - self._robot.data.default_joint_pos,
+                self._robot.data.joint_vel,
             ], dim=-1)
 
         return states
@@ -196,13 +196,13 @@ class R1InterventionEnv(R1BaseEnv):
         return torch.cat([self._robot.data.root_lin_vel_b,
                           self._robot.data.root_ang_vel_b,
                           self._robot.data.projected_gravity_b,
-                          self._robot.data.joint_pos - self._robot.data.default_joint_pos[:, total_joint_ids],
+                          self._robot.data.joint_pos - self._robot.data.default_joint_pos,
                           self._robot.data.joint_vel], dim=-1)
 
     def _get_safety_values(self):
         # safety value
         base_tilt = (torch.atan2(torch.norm(self._robot.data.projected_gravity_b[:, :2], dim=-1), -self._robot.data.projected_gravity_b[:, 2]) - self.cfg.phi_thr) / self.cfg.phi_thr
-        base_height = (self.cfg.height_thr - self._robot.data.root_pos_w[:, 2]) / 0.1
+        base_height = (self.cfg.height_thr - self._robot.data.root_pos_w[:, 2]) / (self.cfg.target_height - self.cfg.height_thr)
 
         return torch.max(base_tilt, base_height)
 

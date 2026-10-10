@@ -160,9 +160,6 @@ class R1BaseEnv(InterventionEnv):
             )
         )
 
-        self.leg_joint_limits = self.joint_pos_limits[:, self.total_leg_joint_ids]
-        self.arm_joint_limits = self.joint_pos_limits[:, self.total_arm_joint_ids]
-
     # Scene
     def _setup_scene(self):
         # Robot

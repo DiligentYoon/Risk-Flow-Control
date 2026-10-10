@@ -57,10 +57,10 @@ class SafetyQActor(Model):
             raw_actions = mean
         else:
             raw_actions = distribution.rsample()
-        # actions = raw_actions
-        # log_prob = distribution.log_prob(raw_actions)
-        actions = torch.tanh(raw_actions)
-        log_prob = distribution.log_prob(raw_actions) - torch.log(1.0 - actions.pow(2) + 1e-6)
+        actions = raw_actions
+        log_prob = distribution.log_prob(raw_actions)
+        # actions = torch.tanh(raw_actions)
+        # log_prob = distribution.log_prob(raw_actions) - torch.log(1.0 - actions.pow(2) + 1e-6)
         return actions, log_prob.sum(dim=-1, keepdim=True)
 
 
@@ -74,15 +74,15 @@ class SafetyQCritic(Model):
         self.critic_standardizer = RunningMeanStd(shape=self.num_inputs, device=device)
 
         self.q1 = nn.Sequential(
-            nn.Linear(self.num_inputs, 256), Sin(),
-            nn.Linear(256, 256), Sin(),
-            nn.Linear(256, 1),
+            nn.Linear(self.num_inputs, 128), Sin(),
+            nn.Linear(128, 128), Sin(),
+            nn.Linear(128, 1),
         )
 
         self.q2 = nn.Sequential(
-            nn.Linear(self.num_inputs, 256), Sin(),
-            nn.Linear(256, 256), Sin(),
-            nn.Linear(256, 1),
+            nn.Linear(self.num_inputs, 128), Sin(),
+            nn.Linear(128, 128), Sin(),
+            nn.Linear(128, 1),
         )
 
         self.init_weights()

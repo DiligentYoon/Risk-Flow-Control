@@ -192,10 +192,7 @@ def main():
     CLI_track_l_term_min = collections.deque(maxlen=env.num_envs)
     CLI_track_g = collections.deque(maxlen=env.num_envs)
     CLI_track_l = collections.deque(maxlen=env.num_envs)
-    CLI_track_action_norm = collections.deque(maxlen=env.num_envs)
     cumulative_timesteps = torch.zeros((env.num_envs, 1), dtype=torch.int32, device=env.device)
-    cumulative_reach_values = torch.zeros((env.num_envs, 1), dtype=torch.float32, device=env.device)
-    cumulative_safety_values = torch.zeros((env.num_envs, 1), dtype=torch.float32, device=env.device)
 
     obs, states, reach_values, safety_values, infos = env.reset()
     timestep = 0
@@ -203,7 +200,7 @@ def main():
     elapsed_time = 0.0
     update_info = None
     start_time = time.time()
-    CLI_interval = min(buffer.buffer_size, 512)
+    CLI_interval = min(buffer.buffer_size, 256)
 
     # ======================= Interaction ========================= #
     try:

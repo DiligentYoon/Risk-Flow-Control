@@ -17,7 +17,7 @@ from ..R1_base_env_cfg import R1BaseEnvCfg
 @configclass
 class R1InterventionEnvCfg(R1BaseEnvCfg):
     ## ==================== Environment parameters ==================== ##
-    episode_length_s = 9.0
+    episode_length_s = 4.0
     sim_dt = 0.005
     decimation = 4
 
@@ -35,14 +35,14 @@ class R1InterventionEnvCfg(R1BaseEnvCfg):
     observation_space = 87
     state_space = 62
     num_agents = 1
-    action_scale_factor = 3.0
+    action_scale_factor = 1.0
 
     # ===== Gait guidance ===== #
     time_period = 0.45
 
     # Failure
     termination_height  = 0.35
-    height_thr = 0.45
+    height_thr = 0.35
     phi_thr = 3.14/4
 
     # Target
