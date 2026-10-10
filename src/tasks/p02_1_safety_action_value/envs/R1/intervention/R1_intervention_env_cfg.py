@@ -35,7 +35,7 @@ class R1InterventionEnvCfg(R1BaseEnvCfg):
     observation_space = 87
     state_space = 62
     num_agents = 1
-    action_scale_factor = 0.5
+    action_scale_factor = 3.0
 
     # ===== Gait guidance ===== #
     time_period = 0.45

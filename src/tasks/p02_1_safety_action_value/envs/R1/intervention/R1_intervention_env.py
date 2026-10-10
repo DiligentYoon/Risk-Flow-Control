@@ -210,20 +210,20 @@ class R1InterventionEnv(R1BaseEnv):
         # target set value
         base_ang_vel = torch.norm(self._robot.data.root_ang_vel_b, dim=-1)
         base_lin_vel = torch.norm(self._robot.data.root_lin_vel_b, dim=-1)
-        base_tilt = torch.atan2(torch.norm(self._robot.data.projected_gravity_b[:, :2], dim=-1), -self._robot.data.projected_gravity_b[:, 2])
-        base_height = self._robot.data.root_pos_w[:, 2]
-        joint_dev = torch.abs(self._robot.data.joint_pos - self._robot.data.default_joint_pos)
+        base_tilt = torch.atan2(torch.norm(self._robot.data.projected_gravity_b[:, :2], dim=-1),
+                                -self._robot.data.projected_gravity_b[:, 2])
 
-        # l_ang_vel = (base_ang_vel - self.cfg.ang_vel_thr)
-        # l_lin_vel = (base_lin_vel - self.cfg.lin_vel_thr) 
-        # l_tilt    = (base_tilt - self.cfg.target_tilt)    
-        l_ang_vel = (base_ang_vel - self.cfg.ang_vel_thr)  / self.cfg.ang_vel_max
-        l_lin_vel = (base_lin_vel - self.cfg.lin_vel_thr)  / self.cfg.lin_vel_max
-        l_tilt    = (base_tilt - self.cfg.target_tilt)     / self.cfg.target_tilt
-        l_joint   = torch.max(joint_dev - self.cfg.joint_dev_thr, dim=-1).values / self.cfg.joint_dev_thr
-        # l_height  = (self.cfg.target_height - base_height) / (self.cfg.target_height - self.cfg.height_thr)
+        l_ang_vel = torch.where(base_ang_vel < self.cfg.ang_vel_thr,
+                                (base_ang_vel - self.cfg.ang_vel_thr) / self.cfg.ang_vel_thr,
+                                (base_ang_vel - self.cfg.ang_vel_thr) / (self.cfg.ang_vel_max - self.cfg.ang_vel_thr))
+        l_lin_vel = torch.where(base_lin_vel < self.cfg.lin_vel_thr,
+                                (base_lin_vel - self.cfg.lin_vel_thr) / self.cfg.lin_vel_thr,
+                                (base_lin_vel - self.cfg.lin_vel_thr) / (self.cfg.lin_vel_max - self.cfg.lin_vel_thr))
+        l_tilt = torch.where(base_tilt < self.cfg.target_tilt,
+                            (base_tilt - self.cfg.target_tilt) / self.cfg.target_tilt,
+                            (base_tilt - self.cfg.target_tilt) / (self.cfg.phi_thr - self.cfg.target_tilt))
 
-        return torch.stack([l_ang_vel, l_lin_vel, l_tilt], dim=-1).max(dim=-1).values
+        return torch.stack([l_ang_vel, l_lin_vel, l_tilt], dim=-1).max(dim=-1).values.clamp(max=1.5)
 
 
     def _get_rewards(self) -> torch.Tensor:
@@ -241,9 +241,9 @@ class R1InterventionEnv(R1BaseEnv):
 
         time_out = self.episode_length_buf >= self.max_episode_length - 1
 
-        critical_contact_forces = torch.norm(self.contact_sensors.data.net_forces_w_history[:, :, self.denied_collision_link_ids], dim=-1)
-        died_fall = self.root_pos_w[:, 2] <= self.cfg.termination_height
-        died_collision = torch.any(torch.any(critical_contact_forces > 1.0, dim=-1), dim=-1)
+        # critical_contact_forces = torch.norm(self.contact_sensors.data.net_forces_w_history[:, :, self.denied_collision_link_ids], dim=-1)
+        # died_fall = self.root_pos_w[:, 2] <= self.cfg.termination_height
+        # died_collision = torch.any(torch.any(critical_contact_forces > 1.0, dim=-1), dim=-1)
 
         died = self._get_safety_values().squeeze(-1) > 0.1
 
