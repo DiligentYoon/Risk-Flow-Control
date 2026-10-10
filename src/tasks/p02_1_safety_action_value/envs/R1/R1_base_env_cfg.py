@@ -36,15 +36,17 @@ class EventCfg:
             "pose_range": {
                 "x": (0.0, 0.0),
                 "y": (0.0, 0.0),
+                "roll": (-3.14/6,  3.14/6),
+                "pitch": (-3.14/6, 3.14/6),
                 "yaw": (-3.14, 3.14),
             },
             "velocity_range": {
-                "x": (0.0, 0.0),
-                "y": (0.0, 0.0),
+                "x": (-1.0, 1.0),
+                "y": (-1.0, 1.0),
                 "z": (0.0, 0.0),
-                "roll": (0.0, 0.0),
-                "pitch": (0.0, 0.0),
-                "yaw": (0.0, 0.0),
+                "roll": (-3.14/4, 3.14/4),
+                "pitch": (-3.14/4, 3.14/4),
+                "yaw": (-3.14/4, 3.14/4),
             },
         },
     )
@@ -53,26 +55,26 @@ class EventCfg:
         func=randomizer.reset_joints_by_scale,
         mode="reset",
         params={
-            "position_range": (1.0, 1.0),
+            "position_range": (0.9, 1.1),
             "velocity_range": (0.0, 0.0),
         },
     )
 
     # Interval
-    push_robot = EventTerm(
-        func=randomizer.push_by_setting_velocity,
-        mode="interval",
-        interval_range_s=(3.0, 3.0),
-        params={
-            "asset_cfg": SceneEntityCfg("robot", body_names="waist_yaw_link",),
-            "velocity_range": {
-                "x": (-3.0, 3.0),
-                "y": (-3.0, 3.0),
-                "roll": (-2.0, 2.0),
-                "pitch": (-2.0, 2.0),
-            },
-        },
-    )
+    # push_robot = EventTerm(
+    #     func=randomizer.push_by_setting_velocity,
+    #     mode="interval",
+    #     interval_range_s=(3.0, 3.0),
+    #     params={
+    #         "asset_cfg": SceneEntityCfg("robot", body_names="waist_yaw_link",),
+    #         "velocity_range": {
+    #             "x": (-3.0, 3.0),
+    #             "y": (-3.0, 3.0),
+    #             "roll": (-2.0, 2.0),
+    #             "pitch": (-2.0, 2.0),
+    #         },
+    #     },
+    # )
 
 
 @configclass

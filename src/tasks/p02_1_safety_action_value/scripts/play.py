@@ -23,7 +23,7 @@ parser.add_argument("--video", action="store_true", default=False, help="Record 
 parser.add_argument("--video_length", type=int, default=500, help="Length of the recorded video (in steps).")
 parser.add_argument("--video_interval", type=int, default=2000, help="Interval between video recordings (in steps).")
 parser.add_argument("--disable_fabric", type=bool, default=False, help="Disable fabric and use USD I/O operations.")
-parser.add_argument("--num_envs", type=int, default=32, help="Number of environments to simulate.")
+parser.add_argument("--num_envs", type=int, default=3, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default="R1-intervention-play", help="Name of the task.")
 parser.add_argument("--checkpoint", type=str, default=None, help="Path to Safety-Q checkpoint.")
 parser.add_argument("--nominal_checkpoint", type=str, default=None, help="Path to frozen nominal PPO checkpoint.")
@@ -53,6 +53,7 @@ from tasks.p02_1_safety_action_value.buffer.replay_buffer import ReplayBuffer
 from tasks.p02_1_safety_action_value.model.safety_q import SafetyQActor, SafetyQCritic
 from tasks.p02_1_safety_action_value.utils.scheduler import StepScheduler
 from tasks.p02_1_safety_action_value.wrappers.intervention_wrapper import InterventionEnvRecordVideo, InterventionEnvWrapper
+from tasks.p02_1_safety_action_value.utils.evaluator import RolloutEvaluator
 
 # config shortcuts
 algorithm = args_cli.nominal_algorithm.lower()
@@ -171,38 +172,42 @@ def main():
         agent.load(resume_path)
         print(f"[INFO] Get Safety-Q checkpoint from {resume_path}")
 
+    # ============================= Evaluator =============================
+    evaluator = RolloutEvaluator(
+        num_envs=env.num_envs,
+        max_episode_length=env._unwrapped.max_episode_length,
+        device=env.device,
+        discount_factor=cfg["agent"]["discount_factor"],
+        threshold=cfg["agent"]["threshold"],
+    )
+
     # ======================= Initial Setting ========================= #
     CLI_track_timesteps = collections.deque(maxlen=env.num_envs)
     cumulative_timesteps = torch.zeros((env.num_envs, 1), dtype=torch.int32, device=env.device)
 
-    obs, states, safety_values, infos = env.reset()
+    obs, states, reach_values, safety_values, infos = env.reset()
     timestep = 0
     logstep = 0
     elapsed_time = 0.0
     start_time = time.time()
-    CLI_interval = 100
+    CLI_interval = 500
 
     # ======================= Interaction ========================= #
     try:
         while simulation_app.is_running() and timestep < cfg["train"]["timesteps"]:
             with torch.inference_mode():
-                nominal_actions, _, _ = nominal_agent.act(observations=obs, infos=infos, timestep=timestep, deterministic=True, update_rms=False)
-                # Filtering decision in Evaluation Phase
-                executed_actions = nominal_actions
-                # Filtering Logic
-                shield_flag = torch.zeros((env.num_envs, 1), dtype=torch.bool, device=env.device)
-                shield_flag = agent.predict(states, nominal_actions) > cfg["agent"]["shield_threshold"]
-                if torch.any(shield_flag):
-                    executed_actions = nominal_actions.clone()
-                    mask = shield_flag.squeeze(-1)
-                    executed_actions[mask] = agent.act(obs[mask], deterministic=True)
+                backup_actions = agent.act(observations=obs, deterministic=True)
+                pred_values = agent.predict(states=states, actions=backup_actions).squeeze(-1)
+                executed_actions = backup_actions
 
                 (
                     next_obs,
                     next_states,
+                    next_reach_values,
                     next_safety_values,
                     final_obs,
                     final_states,
+                    final_reach_values,
                     final_safety_values,
                     rewards,
                     terminated,
@@ -210,7 +215,21 @@ def main():
                     next_infos,
                 ) = env.step(executed_actions)
 
+                final_backup_actions = agent.act(observations=final_obs, deterministic=True)
+                final_pred_values = agent.predict(states=final_states, actions=final_backup_actions).squeeze(-1)
+
             timestep += 1
+
+            evaluator.append(
+                g_values=safety_values,
+                l_values=reach_values,
+                pred_values=pred_values,
+                final_g_values=final_safety_values,
+                final_l_values=final_reach_values,
+                final_pred_values=final_pred_values,
+                terminated=terminated,
+                truncated=truncated,
+            )
 
             cumulative_timesteps.add_(1)
             done = (terminated | truncated).squeeze(-1)
@@ -258,11 +277,21 @@ def main():
 
             obs = next_obs
             states = next_states
+            reach_values = next_reach_values
             safety_values = next_safety_values
             infos = next_infos
 
-            if args_cli.video and timestep == args_cli.video_length:
+            if timestep == args_cli.video_length:
                 break
+
+        if evaluator.num_episodes > 0:
+            step_dt = float(env._unwrapped.step_dt)
+            plot_dir = os.path.join(log_dir, "plots")
+            os.makedirs(plot_dir, exist_ok=True)
+
+            evaluator.save_timeseries_plot(file_path=os.path.join(plot_dir, "value_trajectory.png"), step_dt=step_dt)
+            print(f"[INFO] Evaluation plots saved to: {log_dir}")
+
 
     finally:
         env.close()

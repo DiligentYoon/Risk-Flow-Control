@@ -3,51 +3,38 @@ seed: 42
 train:
   timesteps: 36000
   optimize_freq: 1
-  update_per_opt: 2
+  update_per_opt: 8
 
 buffer:
   buffer_size: 1024
 
 agent:
   class: SafetyQ
-  batch_size: 4096
+  batch_size: 16384
   learning_starts: 64
-  grad_norm_clip: 1.0
+  grad_norm_clip: 0.0
 
-  discount_factor: 0.99
+  discount_factor: 0.9
   gamma_schedule:
     enabled: true
-    period: 3000
+    period: 10000
     decay: 0.5
-    end_value: 0.999
-    goal_value: 1.0
+    end_value: 0.99
+    goal_value: 0.99
 
-  alpha: 0.0
-  learn_alpha: false
+  alpha: 0.05
+  learn_alpha: true
 
-  critic_learning_rate: 5.0e-04
+  critic_learning_rate: 3.0e-04
   actor_learning_rate: 1.0e-04
-  alpha_learning_rate: 1.0e-04
-  tau: 0.05
-  update_period: 1
+  alpha_learning_rate: 2.0e-05
+  tau: 0.01
+  update_period: 2
 
-  rho_schedule:
-    init_value: 1.0
-    period: 6000
-    decay: 0.8
-    end_value: 0.0
-
-  epsilon_schedule:
-    init_value: 0.1
-    period: 6000
-    decay: 0.8
-    end_value: 1.0
-    goal_value: 1.0
-
-  shield_threshold: 0.0
+  threshold: 0.0
 
   model:
-    min_log_std: -20.0
+    min_log_std: -10.0
     max_log_std: 1.0
 
   experiment:

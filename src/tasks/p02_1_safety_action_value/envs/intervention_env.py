@@ -132,8 +132,8 @@ class InterventionEnv(Env):
         # Next states masking
         final_obs_buf[~self.reset_buf] = self.obs_buf[~self.reset_buf]
         final_states_buf[~self.reset_buf] = self.state_buf[~self.reset_buf]
-        final_safety_value_buf[~self.reset_buf] = self.safety_value_buf[~self.reset_buf]
         final_reach_value_buf[~self.reset_buf] = self.reach_value_buf[~self.reset_buf]
+        final_safety_value_buf[~self.reset_buf] = self.safety_value_buf[~self.reset_buf]
 
         # update viz data
         if self.cfg.viz_data is not None:

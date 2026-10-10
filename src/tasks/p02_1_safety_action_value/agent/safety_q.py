@@ -31,7 +31,7 @@ class SafetyQ(Agent):
         self.buffer = buffer
 
         self.batch_size = self.cfg["batch_size"]
-        self.learning_starts = self.cfg["learning_starts"]
+        self.num_grad_step = self.cfg["num_grad_step"]
         self.discount_factor = self.cfg["discount_factor"]
         self.grad_norm_clip = self.cfg["grad_norm_clip"]
         self.target_tau = self.cfg["tau"]
@@ -122,7 +122,7 @@ class SafetyQ(Agent):
 
         reach_avoid = torch.maximum(torch.minimum(next_reach_values, next_q), next_safety_values)
         target = (1.0 - self.discount_factor) * torch.maximum(next_reach_values, next_safety_values) + self.discount_factor * reach_avoid
-        return torch.where(terminated | truncated, next_safety_values, target) # no bootstrapping at termination and truncation.
+        return torch.where(terminated, torch.maximum(next_reach_values, next_safety_values), target) # no bootstrapping at termination and truncation.
         # target = (1.0 - self.discount_factor) * next_safety_values + self.discount_factor * torch.maximum(next_safety_values, next_q)
         # return torch.where(terminated | truncated, next_safety_values, target)
 
@@ -140,50 +140,59 @@ class SafetyQ(Agent):
             target_buffer.copy_(buffer)
 
     def update(self) -> Optional[Dict[str, Any]]:
-        if self.buffer is None or len(self.buffer) < self.learning_starts * self.buffer.num_envs:
-            return None
-
+        cumulative_actor_loss = 0
+        cumulative_critic_loss = 0
+        cumulative_entropy_loss = 0
+        cumulative_alpha_loss = 0
         self.set_running_mode("train")
-        (
-            observations, 
-            states,
-            next_observations, 
-            next_states,
-            next_reach_values,
-            next_safety_values, 
-            actions, 
-            terminated, truncated
-        ) = self.buffer.sample_batch(self.tensors_names, self.batch_size)
+        for i in range(self.num_grad_step):
+            (
+                observations, 
+                states,
+                next_observations, 
+                next_states,
+                next_reach_values,
+                next_safety_values, 
+                actions, 
+                terminated, truncated
+            ) = self.buffer.sample_batch(self.tensors_names, self.batch_size)
 
-        target = self.compute_target(next_observations, next_states, next_reach_values, next_safety_values, terminated, truncated)
-        q1, q2 = self.critic(states, actions, update_rms=True)
-        loss_q1 = F.mse_loss(q1, target)
-        loss_q2 = F.mse_loss(q2, target)
-        critic_loss = loss_q1 + loss_q2
+            target = self.compute_target(next_observations, next_states, next_reach_values, next_safety_values, terminated, truncated)
+            q1, q2 = self.critic(states, actions, update_rms=True)
+            loss_q1 = F.mse_loss(q1, target)
+            loss_q2 = F.mse_loss(q2, target)
+            critic_loss = loss_q1 + loss_q2
 
-        self.critic_optimizer.zero_grad()
-        critic_loss.backward()
-        if self.grad_norm_clip > 0:
-            nn.utils.clip_grad_norm_(self.critic.parameters(), self.grad_norm_clip)
-        self.critic_optimizer.step()
+            self.critic_optimizer.zero_grad()
+            critic_loss.backward()
+            if self.grad_norm_clip > 0:
+                nn.utils.clip_grad_norm_(self.critic.parameters(), self.grad_norm_clip)
+            self.critic_optimizer.step()
 
-        actor_loss = torch.zeros((), device=self.device)
-        entropy_loss = torch.zeros((), device=self.device)
-        alpha_loss = torch.zeros((), device=self.device)
-        if self.update_counter % self.update_period == 0:
-            actor_loss, entropy_loss, alpha_loss = self._update_actor(observations, states)
+            actor_loss = torch.zeros((), device=self.device)
+            entropy_loss = torch.zeros((), device=self.device)
+            alpha_loss = torch.zeros((), device=self.device)
+            if i % self.update_period == 0:
+                actor_loss, entropy_loss, alpha_loss = self._update_actor(observations, states)
+
             self.update_target()
 
-        self.update_counter += 1
+            cumulative_actor_loss += actor_loss.item()
+            cumulative_critic_loss += critic_loss.item()
+            cumulative_entropy_loss += entropy_loss.item()
+            cumulative_alpha_loss += alpha_loss.item()
+
+        per_step_actor_loss = cumulative_actor_loss / (self.num_grad_step / self.update_period)
+        per_step_critic_loss = cumulative_critic_loss / self.num_grad_step
+        per_step_entropy_loss = cumulative_entropy_loss / (self.num_grad_step / self.update_period)
+        per_step_alpha_loss = cumulative_alpha_loss / (self.num_grad_step / self.update_period)
         self.set_running_mode("eval")
 
         return {
-            "critic_loss": critic_loss.item(),
-            "critic_loss_1": loss_q1.item(),
-            "critic_loss_2": loss_q2.item(),
-            "actor_loss": actor_loss.item(),
-            "entropy_loss": entropy_loss.item(),
-            "alpha_loss": alpha_loss.item(),
+            "critic_loss": per_step_critic_loss,
+            "actor_loss": per_step_actor_loss,
+            "entropy_loss": per_step_entropy_loss,
+            "alpha_loss": per_step_alpha_loss,
             "alpha": self.alpha.detach().item(),
             "gamma": self.discount_factor,
             "q_mean": torch.maximum(q1, q2).detach().mean().item(),
@@ -199,14 +208,15 @@ class SafetyQ(Agent):
         q1, q2 = self.critic(states, actions, update_rms=False)
         q = torch.maximum(q1, q2)
         entropy_loss = log_prob.mean()
-        actor_loss = q.mean() + self.alpha * entropy_loss
+        actor_loss = q.mean() + self.alpha.detach() * entropy_loss
 
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
         self.actor_optimizer.step()
 
-        alpha_loss = (self.alpha * (-log_prob - self.target_entropy).detach()).mean()
+        alpha_loss = torch.zeros((), device=self.device)
         if self.alpha_optimizer is not None:
+            alpha_loss = -(self.log_alpha["value"] * (log_prob.detach() + self.target_entropy)).mean()
             self.alpha_optimizer.zero_grad()
             alpha_loss.backward()
             self.alpha_optimizer.step()
