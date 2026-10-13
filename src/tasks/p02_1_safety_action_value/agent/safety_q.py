@@ -97,6 +97,11 @@ class SafetyQ(Agent):
         return actions
 
     @torch.no_grad()
+    def rand_act(self, observations: torch.Tensor) -> torch.Tensor:
+        actions, _ = self.actor.rand_act(observations)
+        return actions
+
+    @torch.no_grad()
     def predict(self, states: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
         q1, q2 = self.critic(states, actions, update_rms=False)
         return torch.maximum(q1, q2)
@@ -120,10 +125,10 @@ class SafetyQ(Agent):
         next_q1, next_q2 = self.target_critic(next_states, next_actions, update_rms=False)
         next_q = torch.maximum(next_q1, next_q2)
         reach_avoid = torch.maximum(torch.minimum(next_reach_values, next_q), next_safety_values)
-        # target = (1.0 - self.discount_factor) * torch.maximum(next_reach_values, next_safety_values) + self.discount_factor * reach_avoid
-        # return torch.where(terminated | truncated, torch.maximum(next_reach_values, next_safety_values), target) # no bootstrapping at termination and truncation.
-        target = (1.0 - self.discount_factor) * next_safety_values + self.discount_factor * torch.maximum(next_safety_values, next_q)
-        return torch.where(terminated | truncated, next_safety_values, target)
+        target = (1.0 - self.discount_factor) * torch.maximum(next_reach_values, next_safety_values) + self.discount_factor * reach_avoid
+        return torch.where(terminated | truncated, torch.maximum(next_reach_values, next_safety_values), target) # no bootstrapping at termination and truncation.
+        # target = (1.0 - self.discount_factor) * next_safety_values + self.discount_factor * torch.maximum(next_safety_values, next_q)
+        # return torch.where(terminated | truncated, next_safety_values, target)
 
     @torch.no_grad()
     def step_gamma(self, steps: int = 1) -> float:
@@ -143,7 +148,9 @@ class SafetyQ(Agent):
         cumulative_critic_loss = 0
         cumulative_entropy_loss = 0
         cumulative_alpha_loss = 0
+        cumulative_q_improvement = 0
         self.set_running_mode("train")
+        
         for i in range(self.num_grad_step):
             (
                 observations, 
@@ -153,9 +160,11 @@ class SafetyQ(Agent):
                 next_reach_values,
                 next_safety_values, 
                 actions, 
-                terminated, truncated
+                terminated, 
+                truncated
             ) = self.buffer.sample_batch(self.tensors_names, self.batch_size)
 
+            critic_loss = torch.zeros((), device=self.device)
             target = self.compute_target(next_observations, next_states, next_reach_values, next_safety_values, terminated, truncated)
             q1, q2 = self.critic(states, actions, update_rms=True)
             loss_q1 = F.mse_loss(q1, target)
@@ -171,16 +180,18 @@ class SafetyQ(Agent):
             actor_loss = torch.zeros((), device=self.device)
             entropy_loss = torch.zeros((), device=self.device)
             alpha_loss = torch.zeros((), device=self.device)
+            q_improvement = torch.zeros((), device=self.device)
             if i % self.update_period == 0:
-                actor_loss, entropy_loss, alpha_loss = self._update_actor(observations, states)
-
-            self.update_target()
+                actor_loss, entropy_loss, alpha_loss, q_improvement = self._update_actor(observations, states)
 
             cumulative_actor_loss += actor_loss.item()
             cumulative_critic_loss += critic_loss.item()
             cumulative_entropy_loss += entropy_loss.item()
             cumulative_alpha_loss += alpha_loss.item()
+            cumulative_q_improvement += q_improvement.item()
 
+        self.update_target()
+        
         per_step_actor_loss = cumulative_actor_loss / (self.num_grad_step / self.update_period)
         per_step_critic_loss = cumulative_critic_loss / self.num_grad_step
         per_step_entropy_loss = cumulative_entropy_loss / (self.num_grad_step / self.update_period)
@@ -192,13 +203,19 @@ class SafetyQ(Agent):
             "actor_loss": per_step_actor_loss,
             "entropy_loss": per_step_entropy_loss,
             "alpha_loss": per_step_alpha_loss,
+            "q_improvement": cumulative_q_improvement,
             "alpha": self.alpha.detach().item(),
             "gamma": self.discount_factor,
             "q_mean": torch.maximum(q1, q2).detach().mean().item(),
             "target_mean": target.mean().item(),
         }
 
-    def _update_actor(self, observations: torch.Tensor, states: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def _update_actor(self, observations: torch.Tensor, states: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        with torch.no_grad():
+            old_actions, _ = self.actor(observations, deterministic=True, update_rms=False)
+            old_q1, old_q2 = self.critic(states, old_actions, update_rms=False)
+            old_q = torch.maximum(old_q1, old_q2)
+
         actions, log_prob = self.actor(observations, deterministic=False, update_rms=True)
 
         for parameter in self.critic.parameters():
@@ -207,7 +224,8 @@ class SafetyQ(Agent):
         q1, q2 = self.critic(states, actions, update_rms=False)
         q = torch.maximum(q1, q2)
         entropy_loss = log_prob.mean()
-        actor_loss = q.mean() + self.alpha.detach() * entropy_loss
+        actor_loss = q.mean()
+        # actor_loss = q.mean() + self.alpha.detach() * entropy_loss
 
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
@@ -220,7 +238,14 @@ class SafetyQ(Agent):
             alpha_loss.backward()
             self.alpha_optimizer.step()
 
+        with torch.no_grad():
+            new_actions, _ = self.actor(observations, deterministic=True, update_rms=False)
+            new_q1, new_q2 = self.critic(states, new_actions, update_rms=False)
+            new_q = torch.maximum(new_q1, new_q2)
+
+        q_improvement = (old_q - new_q).mean()
+
         for parameter in self.critic.parameters():
             parameter.requires_grad_(True)
 
-        return actor_loss.detach(), entropy_loss.detach(), alpha_loss.detach()
+        return q.mean().detach(), entropy_loss.detach(), alpha_loss.detach(), q_improvement.detach()

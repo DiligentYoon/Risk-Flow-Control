@@ -24,7 +24,7 @@ parser.add_argument("--video_length", type=int, default=500, help="Length of the
 parser.add_argument("--video_interval", type=int, default=2000, help="Interval between video recordings (in steps).")
 parser.add_argument("--disable_fabric", type=bool, default=False, help="Disable fabric and use USD I/O operations.")
 parser.add_argument("--num_envs", type=int, default=3, help="Number of environments to simulate.")
-parser.add_argument("--task", type=str, default="R1-intervention-play", help="Name of the task.")
+parser.add_argument("--task", type=str, default="R1-upper-fixed-intervention-play", help="Name of the task.")
 parser.add_argument("--checkpoint", type=str, default=None, help="Path to Safety-Q checkpoint.")
 parser.add_argument("--nominal_checkpoint", type=str, default=None, help="Path to frozen nominal PPO checkpoint.")
 parser.add_argument("--nominal_algorithm", type=str, default="PPO", choices=["PPO", "SAC", "TD3", "MAPPO"], help="The RL algorithm used for training the agent.")
@@ -190,7 +190,7 @@ def main():
     logstep = 0
     elapsed_time = 0.0
     start_time = time.time()
-    CLI_interval = 500
+    CLI_interval = env._unwrapped.max_episode_length
 
     # ======================= Interaction ========================= #
     try:

@@ -1,0 +1,263 @@
+from __future__ import annotations
+
+import torch
+import copy
+
+import isaaclab.sim as sim_utils
+from isaaclab.terrains import TerrainImporter
+from isaaclab.markers import VisualizationMarkers
+from isaaclab.utils.math import euler_xyz_from_quat, quat_apply, quat_mul, quat_from_euler_xyz
+
+from lib.domain_randomizer.commander import UniformNonHolonomicCommand
+
+from ..R1_base_env import R1BaseEnv
+from .R1_intervention_env_cfg import R1InterventionEnvCfg, R1InterventionPlayEnvCfg
+
+
+class R1InterventionEnv(R1BaseEnv):
+    cfg: R1InterventionEnvCfg | R1InterventionPlayEnvCfg
+
+    def __init__(self, cfg: R1InterventionEnvCfg | R1InterventionPlayEnvCfg, render_mode: str | None = None, **kwargs):
+        super().__init__(cfg, render_mode, **kwargs)
+
+        total_body_ids, _ = self.contact_sensors.find_bodies(".*")
+        self.allowed_collision_link_ids, _ = self.contact_sensors.find_bodies(self.cfg.allowed_collision_bodies)
+        self.denied_collision_link_ids = [body_id for body_id in total_body_ids if body_id not in self.allowed_collision_link_ids]
+
+        self.commands = UniformNonHolonomicCommand(self.cfg.commands, self._robot, self.device)
+
+        self.root_pos_w = torch.zeros((self.num_envs, 3), dtype=torch.float, device=self.device)
+        self.root_rot_w = torch.zeros((self.num_envs, 4), dtype=torch.float, device=self.device)
+        self.root_lin_vel_b = torch.zeros((self.num_envs, 3), dtype=torch.float, device=self.device)
+        self.root_ang_vel_b = torch.zeros((self.num_envs, 3), dtype=torch.float, device=self.device)
+        self.root_heading = torch.zeros((self.num_envs, 1), dtype=torch.float, device=self.device)
+        self.projected_gravity = torch.zeros((self.num_envs, 3), dtype=torch.float, device=self.device)
+        self.joint_pos = torch.zeros((self.num_envs, self._robot.num_joints), dtype=torch.float, device=self.device)
+        self.joint_vel = torch.zeros((self.num_envs, self._robot.num_joints), dtype=torch.float, device=self.device)
+        self.foot_rot_w = torch.zeros((self.num_envs, 2, 4), dtype=torch.float, device=self.device)
+
+        self.phase = torch.zeros(self.num_envs, device=self.device)
+        self.phase_count = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        self.update_phase_ids = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+
+        self.command_count = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        self.update_command_ids = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+
+        self.step_period = int(self.cfg.time_period / self.step_dt) * torch.ones(self.num_envs, dtype=torch.long, device=self.device)
+        self.full_step_period = int(2 * self.cfg.time_period / self.step_dt) * torch.ones(self.num_envs, dtype=torch.long, device=self.device)
+
+        self.contact_schedule = torch.zeros(self.num_envs, device=self.device)
+        self.phase_sin = torch.zeros(self.num_envs, device=self.device)
+        self.phase_cos = torch.zeros(self.num_envs, device=self.device)
+
+        self.foot_on_swing = torch.zeros(self.num_envs, 2, dtype=torch.bool, device=self.device)
+        self.support_foot_rot = torch.zeros(self.num_envs, 4, dtype=torch.float, device=self.device)
+
+        self.prev_actions = torch.zeros((self.num_envs, self._robot.num_joints), device=self.device)
+
+        self.forward_vec = torch.tensor([1.0, 0.0, 0.0], device=self.device).repeat(self.num_envs, 1)
+
+        debug_vis = self.num_envs <= 32
+        self.set_debug_vis(debug_vis)
+
+    def _set_debug_vis_impl(self, debug_vis: bool):
+        if debug_vis:
+            if not hasattr(self, "current_vel_visualizer"):
+                self.current_vel_visualizer = VisualizationMarkers(self.cfg.current_vel_visualizer_cfg)
+            self.current_vel_visualizer.set_visibility(True)
+        else:
+            if hasattr(self, "current_vel_visualizer"):
+                self.current_vel_visualizer.set_visibility(False)
+
+    def _debug_vis_callback(self, event):
+        if not self._robot.is_initialized:
+            return
+
+        base_pos_w = self._robot.data.root_pos_w.clone()
+        base_pos_w[:, 2] += 0.6
+
+        # arrow-scale
+        default_scale = self.current_vel_visualizer.cfg.markers["arrow"].scale
+        xy_velocity = self._robot.data.root_lin_vel_b[:, :2]
+        vel_arrow_scale = torch.tensor(default_scale, device=self.device).repeat(xy_velocity.shape[0], 1)
+        vel_arrow_scale[:, 0] *= torch.clip(torch.linalg.norm(xy_velocity, dim=1), min=1e-3) * 3.0
+        # arrow-direction
+        heading_angle = torch.atan2(xy_velocity[:, 1], xy_velocity[:, 0])
+        zeros = torch.zeros_like(heading_angle)
+        vel_arrow_quat = quat_from_euler_xyz(zeros, zeros, heading_angle) # body frame
+        # convert everything back from base to world frame
+        base_quat_w = self._robot.data.root_quat_w
+        vel_arrow_quat = quat_mul(base_quat_w, vel_arrow_quat) # arrow rot in body frame -> world frame
+
+        self.current_vel_visualizer.visualize(base_pos_w[:1], vel_arrow_quat[:1], vel_arrow_scale[:1])
+
+    def _setup_scene(self):
+        super()._setup_scene()
+
+        self.scene.clone_environments(copy_from_source=False)
+
+        self.cfg.terrain.num_envs = self.scene.cfg.num_envs
+        self.cfg.terrain.env_spacing = self.scene.cfg.env_spacing
+        self.terrain = TerrainImporter(self.cfg.terrain)
+
+        light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
+        light_cfg.func("/World/Light", light_cfg)
+
+        self.cfg.commands.num_envs = self.scene.num_envs
+        self.cfg.commands.step_dt = self.step_dt
+
+    def _get_observations(self) -> dict[str, torch.Tensor]:
+        observations = torch.cat([
+            self._robot.data.root_lin_vel_b,
+            self._robot.data.root_ang_vel_b,
+            self._robot.data.projected_gravity_b,
+            self._robot.data.joint_pos - self._robot.data.default_joint_pos,
+            self._robot.data.joint_vel,
+            self.prev_actions,
+        ], dim=-1)
+
+        return observations
+
+    def _get_states(self) -> dict[str, torch.Tensor]:
+        states = torch.cat([
+            self._robot.data.root_pos_w[:, 2:],
+            self._robot.data.root_lin_vel_b,
+            self._robot.data.root_ang_vel_b,
+            self._robot.data.projected_gravity_b,
+            self._robot.data.joint_pos - self._robot.data.default_joint_pos,
+            self._robot.data.joint_vel,
+        ], dim=-1)
+
+        return states
+
+    def _get_safety_states(self):
+        return torch.cat([self._robot.data.root_lin_vel_b,
+                          self._robot.data.root_ang_vel_b,
+                          self._robot.data.projected_gravity_b,
+                          self._robot.data.joint_pos - self._robot.data.default_joint_pos,
+                          self._robot.data.joint_vel], dim=-1)
+
+    def _get_safety_values(self):
+        # safety value
+        base_tilt = (torch.atan2(torch.norm(self._robot.data.projected_gravity_b[:, :2], dim=-1), -self._robot.data.projected_gravity_b[:, 2]) - self.cfg.phi_thr) / self.cfg.phi_thr
+        base_height = (self.cfg.height_thr - self._robot.data.root_pos_w[:, 2]) / (self.cfg.target_height - self.cfg.height_thr)
+
+        return torch.max(base_tilt, base_height)
+
+    def _get_reach_values(self):
+        # target set value
+        base_ang_vel = torch.norm(self._robot.data.root_ang_vel_b, dim=-1)
+        base_lin_vel = torch.norm(self._robot.data.root_lin_vel_b, dim=-1)
+        base_tilt = torch.atan2(torch.norm(self._robot.data.projected_gravity_b[:, :2], dim=-1), -self._robot.data.projected_gravity_b[:, 2])
+        joint_dev = torch.abs(self._robot.data.joint_pos - self._robot.data.default_joint_pos)
+
+        l_ang_vel = torch.where(base_ang_vel < self.cfg.ang_vel_thr,
+                                (base_ang_vel - self.cfg.ang_vel_thr) / self.cfg.ang_vel_thr,
+                                (base_ang_vel - self.cfg.ang_vel_thr) / (self.cfg.ang_vel_max - self.cfg.ang_vel_thr))
+        l_lin_vel = torch.where(base_lin_vel < self.cfg.lin_vel_thr,
+                                (base_lin_vel - self.cfg.lin_vel_thr) / self.cfg.lin_vel_thr,
+                                (base_lin_vel - self.cfg.lin_vel_thr) / (self.cfg.lin_vel_max - self.cfg.lin_vel_thr))
+        # l_joint_dev = torch.where(joint_dev < self.cfg.joint_dev_thr,
+        #                           (joint_dev - self.cfg.joint_dev_thr) / self.cfg.joint_dev_thr,
+        #                           (joint_dev - self.cfg.joint_dev_thr) / (self.cfg.joint_dev_max - self.cfg.joint_dev_thr))
+        l_tilt = torch.where(base_tilt < self.cfg.target_tilt,
+                            (base_tilt - self.cfg.target_tilt) / self.cfg.target_tilt,
+                            (base_tilt - self.cfg.target_tilt) / (self.cfg.phi_thr - self.cfg.target_tilt))
+
+        return torch.stack([l_ang_vel, l_lin_vel], dim=-1).max(dim=-1).values.clamp(max=2.0)
+
+
+    def _get_rewards(self) -> torch.Tensor:
+        rewards = torch.zeros((self.num_envs, 1), dtype=torch.float32, device=self.device)
+        self.prev_actions = self.actions.clone()
+
+        return rewards
+
+    def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
+        self._compute_intermediate_values()
+
+        time_out = self.episode_length_buf >= self.max_episode_length - 1
+        died = self._get_safety_values().squeeze(-1) > 0.0
+
+        return died, time_out
+
+    def _reset_idx(self, env_ids: torch.Tensor | None):
+        if env_ids is None or len(env_ids) == self.num_envs:
+            env_ids = self._robot._ALL_INDICES
+
+        self._robot.reset(env_ids)
+        super()._reset_idx(env_ids)
+
+        self.phase[env_ids] = 0
+        self.phase_count[env_ids] = 0
+        self.update_phase_ids[env_ids] = False
+        self.command_count[env_ids] = 0
+        self.update_command_ids[env_ids] = False
+
+        self.foot_on_swing[env_ids] = 0
+        self.foot_on_swing[env_ids, 0] = 1
+
+        self.prev_actions[env_ids] = 0.0
+
+        self.commands.reset(env_ids)
+        self._compute_intermediate_values(env_ids)
+
+    def _compute_intermediate_values(self, env_ids: torch.Tensor | None = None):
+        i = env_ids if env_ids is not None else self._robot._ALL_INDICES
+
+        self.root_pos_w[i] = self._robot.data.root_pos_w[i]
+        self.root_rot_w[i] = self._robot.data.root_quat_w[i]
+        self.root_lin_vel_b[i] = self._robot.data.root_lin_vel_b[i]
+        self.root_ang_vel_b[i] = self._robot.data.root_ang_vel_b[i]
+
+        forward_root_w = quat_apply(self._robot.data.root_quat_w[i], self.forward_vec[i])
+        self.root_heading[i] = torch.atan2(forward_root_w[:, 1], forward_root_w[:, 0]).unsqueeze(-1)
+        self.projected_gravity[i] = self._robot.data.projected_gravity_b[i]
+
+        self.joint_pos[i] = self._robot.data.joint_pos[i]
+        self.joint_vel[i] = self._robot.data.joint_vel[i]
+
+        self.foot_rot_w[i] = self._robot.data.body_link_quat_w[i][:, self.ankle_x_link_ids]
+
+        if env_ids is not None:
+            self.support_foot_rot[i] = self.foot_rot_w[i, 1, :4]
+        else:
+            self.phase += 1 / self.full_step_period
+            self.phase_count += 1
+            self.update_phase_ids = self.phase_count >= self.full_step_period
+
+            self.command_count += 1
+            self.update_command_ids = self.command_count >= self.step_period
+
+            phase_update_mask = self.update_phase_ids.clone()
+            command_update_mask = self.update_command_ids.clone()
+
+            self.phase[phase_update_mask] = 0
+            self.phase_count[phase_update_mask] = 0
+            self.command_count[command_update_mask] = 0
+
+            if torch.any(self.update_command_ids):
+                self.foot_on_swing[self.update_command_ids] = ~self.foot_on_swing[self.update_command_ids]
+
+                left_support_mask = self.foot_on_swing[:, 0] == 0
+                right_support_mask = self.foot_on_swing[:, 1] == 0
+
+                left_combined_mask = self.update_command_ids & left_support_mask
+                right_combined_mask = self.update_command_ids & right_support_mask
+
+                self.support_foot_rot[left_combined_mask] = self.foot_rot_w[left_combined_mask, 0, :4]
+                self.support_foot_rot[right_combined_mask] = self.foot_rot_w[right_combined_mask, 1, :4]
+
+        self.contact_schedule[i] = smooth_sqr_wave(self.phase[i])
+
+        self.phase_sin[i] = torch.sin(2 * torch.pi * self.phase[i])
+        self.phase_cos[i] = torch.cos(2 * torch.pi * self.phase[i])
+
+    def _update_viz_data(self):
+        return self.extras
+
+@torch.jit.script
+def smooth_sqr_wave(phase):
+    p = 2.0 * torch.pi * phase
+    eps = 0.2
+    return torch.sin(p) / torch.sqrt(torch.sin(p) ** 2.0 + eps**2.0)

@@ -35,7 +35,7 @@ class R1InterventionEnvCfg(R1BaseEnvCfg):
     observation_space = 87
     state_space = 62
     num_agents = 1
-    action_scale_factor = 1.0
+    action_scale_factor = 2.0
 
     # ===== Gait guidance ===== #
     time_period = 0.45
@@ -46,9 +46,8 @@ class R1InterventionEnvCfg(R1BaseEnvCfg):
     phi_thr = 3.14/4
 
     # Target
-    lin_vel_thr = 0.1
-    ang_vel_thr = 0.5
-    joint_dev_thr = 10.0 * 3.14 / 180
+    lin_vel_thr = 1.0
+    ang_vel_thr = 1.0
     target_tilt = 10 * 3.14 / 180
     target_height = 0.6
 

@@ -37,6 +37,7 @@ class RolloutEvaluator:
             "step": [],
             "g_value": [],
             "l_value": [],
+            "empirical_reach_avoid": [],
             "pred_value": [],
             "terminated": [],
             "truncated": [],
@@ -82,6 +83,7 @@ class RolloutEvaluator:
         self.history["g_value"].append(float(g_values[0].item()))
         self.history["l_value"].append(float(l_values[0].item()))
         self.history["pred_value"].append(float(pred_values[0].item()))
+        self.history["empirical_reach_avoid"].append(np.nan)
         self.history["terminated"].append(bool(terminated[0].item()))
         self.history["truncated"].append(bool(truncated[0].item()))
         self.history_indices.append(history_index)
@@ -106,11 +108,23 @@ class RolloutEvaluator:
             l_values = self.l_buffer[env_id, :length + 1]
             values = self.value_buffer[env_id, :length + 1]
 
+            # empirical reach-avoid target values
+            empirical = torch.empty_like(g_values)
+            empirical[-1] = torch.maximum(g_values[-1], l_values[-1])
+
+            gamma = self.discount_factor
+            for t in range(len(g_values) - 2, -1, -1):
+                g_next = g_values[t + 1]
+                l_next = l_values[t + 1]
+                continuation = torch.maximum(g_next, torch.minimum(l_next, empirical[t + 1]))
+                empirical[t] = (1.0 - gamma) * torch.maximum(l_next, g_next) + gamma * continuation
+
             episode = {
                 "env_id": env_id,
                 "g_values": g_values.detach().cpu().clone(),
                 "l_values": l_values.detach().cpu().clone(),
                 "values": values.detach().cpu().clone(),
+                "empirical_values": empirical.detach().cpu().clone(),
                 "truncated": bool(truncated[env_id].item()),
             }
             self.episodes.append(episode)
@@ -119,6 +133,10 @@ class RolloutEvaluator:
                 self.history_episodes.append(episode)
                 if len(self.history_indices) != length:
                     raise RuntimeError(f"History mismatch: indices={len(self.history_indices)}, episode={length}")
+                
+                for history_index, empirical_value in zip(self.history_indices, empirical[:-1]):
+                    self.history["empirical_reach_avoid"][history_index] = float(empirical_value.item())
+
                 self.history_indices.clear()
 
             self.num_samples += length
@@ -150,6 +168,7 @@ class RolloutEvaluator:
         g_values = np.asarray(self.history["g_value"], dtype=np.float32)
         l_values = np.asarray(self.history["l_value"], dtype=np.float32)
         values = np.asarray(self.history["pred_value"], dtype=np.float32)
+        empirical_values = np.asarray(self.history["empirical_reach_avoid"], dtype=np.float32)
         terminated = np.asarray(self.history["terminated"], dtype=bool)
         truncated = np.asarray(self.history["truncated"], dtype=bool)
 
@@ -158,6 +177,7 @@ class RolloutEvaluator:
         axes.plot(time_axis, g_values, label=r"$g(s_t)$")
         axes.plot(time_axis, l_values, label=r"$l(s_t)$")
         axes.plot(time_axis, values, label=r"$Q_N(s_t,a_t)$")
+        axes.plot(time_axis, empirical_values, label=r"$\hat{Q}_{RA}^{emp}(s_t,a_t)$")
         axes.axhline(self.threshold, linestyle=":", label="Risk boundary")
         axes.set_ylabel("Risk value")
         axes.legend()

@@ -24,7 +24,7 @@ parser.add_argument("--video_length", type=int, default=500, help="Length of the
 parser.add_argument("--video_interval", type=int, default=500, help="Interval between video recordings (in steps).")
 parser.add_argument("--disable_fabric", type=bool, default=False, help="Disable fabric and use USD I/O operations.")
 parser.add_argument("--num_envs", type=int, default=2048, help="Number of environments to simulate.")
-parser.add_argument("--task", type=str, default="R1-intervention", help="Name of the task.")
+parser.add_argument("--task", type=str, default="R1-upper-fixed-intervention", help="Name of the task.")
 parser.add_argument("--checkpoint", type=str, default=None, help="Path to Safety-Q checkpoint.")
 parser.add_argument("--nominal_checkpoint", type=str, default=None, help="Path to frozen nominal PPO checkpoint.")
 parser.add_argument("--nominal_algorithm", type=str, default="PPO", choices=["PPO", "SAC", "TD3", "MAPPO"], help="The RL algorithm used for training the agent.")
@@ -32,6 +32,7 @@ parser.add_argument("--model", type=str, default="MLP", choices=["MLP", "Shared"
 
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
+args_cli.video = True
 if args_cli.video:
     args_cli.enable_cameras = True
 
@@ -206,8 +207,10 @@ def main():
     try:
         while simulation_app.is_running() and timestep < cfg["train"]["timesteps"]:
             with torch.inference_mode():
-                backup_actions = agent.act(observations=obs, deterministic=False)
-                executed_actions = backup_actions
+                if cfg["train"]["learning_starts"] <= timestep:
+                    executed_actions = agent.act(observations=obs, deterministic=False)
+                else:
+                    executed_actions = agent.rand_act(observations=obs)
 
                 (
                     next_obs,
@@ -265,6 +268,7 @@ def main():
                 tracking_timesteps.extend(cumulative_timesteps[finished_episodes, 0].detach().cpu().tolist())
                 CLI_track_timesteps.extend(cumulative_timesteps[finished_episodes, 0].detach().cpu().tolist())
                 cumulative_timesteps[finished_episodes] = 0
+
             if tracking_timesteps:
                 tracking_data["Episode / Total timesteps (mean)"].append(float(np.mean(tracking_timesteps)))
                 tracking_timesteps.clear()
@@ -318,6 +322,8 @@ def main():
                 avg_l_str = "-" if np.isnan(avg_l) else f"{avg_l:6.3f}"
                 critic_loss_str = "-" if update_info is None else f"{update_info['critic_loss']:8.5f}"
                 actor_loss_str = "-" if update_info is None else f"{update_info['actor_loss']:8.5f}"
+                entropy_loss_str = "-" if update_info is None else f"{update_info['entropy_loss']:8.5f}"
+                q_improvement_str = "-" if update_info is None else f"{update_info['q_improvement']:8.5f}"
                 alpha_str = "-" if update_info is None else f"{update_info['alpha']:7.4f}"
                 gamma_str = f"{agent.discount_factor:7.4f}"
 
@@ -338,6 +344,8 @@ def main():
                     f"Rollout Time            : {end_time - start_time:6.3f} sec",
                     f"Value Loss              : {critic_loss_str}",
                     f"Policy Loss             : {actor_loss_str}",
+                    f"Entropy Loss            : {entropy_loss_str}",
+                    f"Q Improvement           : {q_improvement_str}",
                     f"Alpha                   : {alpha_str}",
                     f"Gamma                   : {gamma_str}",
                     f"Avg g                   : {avg_g_str}",

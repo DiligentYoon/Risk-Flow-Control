@@ -41,11 +41,9 @@ class SafetyQActor(Model):
             nn.Linear(256, self.num_actions),
         )
 
-        self.log_std = nn.Parameter(torch.full((num_actions,), -1.0), requires_grad=True)
+        self.log_std = nn.Parameter(torch.full((num_actions,), -3.0), requires_grad=True)
         self.init_weights()
         self.init_biases(val=0)
-        with torch.no_grad():
-            self.mean[-1].weight.mul_(0.01)
         self.to(device)
 
     def forward(self, observations: torch.Tensor, deterministic: bool = False, update_rms: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
@@ -57,12 +55,29 @@ class SafetyQActor(Model):
             raw_actions = mean
         else:
             raw_actions = distribution.rsample()
-        actions = raw_actions
-        log_prob = distribution.log_prob(raw_actions)
-        # actions = torch.tanh(raw_actions)
-        # log_prob = distribution.log_prob(raw_actions) - torch.log(1.0 - actions.pow(2) + 1e-6)
+        # actions = raw_actions
+        # log_prob = distribution.log_prob(raw_actions)
+        actions = torch.tanh(raw_actions)
+        log_prob = distribution.log_prob(raw_actions) - torch.log(1.0 - actions.pow(2) + 1e-6)
         return actions, log_prob.sum(dim=-1, keepdim=True)
 
+    def rand_act(self, observations: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+
+        batch_size = observations.shape[0]
+
+        # Create a standard normal distribution for random actions (mean=0, std=1)
+        mean = torch.zeros((batch_size, self.num_actions), device=self.device)
+        std = torch.ones((batch_size, self.num_actions), device=self.device)
+        distribution = Normal(mean, std)
+
+        # Sample raw actions and squash them to [-1, 1] using tanh
+        raw_actions = distribution.rsample()
+        actions = torch.tanh(raw_actions)
+        log_prob = distribution.log_prob(raw_actions) - torch.log(1.0 - actions.pow(2) + 1e-6)
+        # actions = raw_actions
+        # log_prob = distribution.log_prob(raw_actions)
+
+        return actions, log_prob.sum(dim=-1, keepdim=True)
 
 class SafetyQCritic(Model):
     def __init__(self, num_states: int, num_actions: int, device: Union[str, torch.device] = "cuda:0") -> None:

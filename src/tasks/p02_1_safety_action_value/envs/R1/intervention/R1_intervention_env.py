@@ -124,9 +124,6 @@ class R1InterventionEnv(R1BaseEnv):
                     self._robot.data.root_lin_vel_b,
                     self._robot.data.root_ang_vel_b,
                     self._robot.data.projected_gravity_b,
-                    # self.commands.command_b,
-                    # self.phase_sin.unsqueeze(-1),
-                    # self.phase_cos.unsqueeze(-1),
                     self._robot.data.joint_pos[:, self.total_arm_joint_ids] - self._robot.data.default_joint_pos[:, self.total_arm_joint_ids],
                     self._robot.data.joint_vel[:, self.total_arm_joint_ids] - self._robot.data.default_joint_pos[:, self.total_arm_joint_ids],
                     self.prev_actions["arm"],
@@ -135,9 +132,6 @@ class R1InterventionEnv(R1BaseEnv):
                     self._robot.data.root_lin_vel_b,
                     self._robot.data.root_ang_vel_b,
                     self._robot.data.projected_gravity_b,
-                    # self.commands.command_b,
-                    # self.phase_sin.unsqueeze(-1),
-                    # self.phase_cos.unsqueeze(-1),
                     self._robot.data.joint_pos[:, self.total_leg_joint_ids] - self._robot.data.default_joint_pos[:, self.total_leg_joint_ids],
                     self._robot.data.joint_vel[:, self.total_leg_joint_ids] - self._robot.data.default_joint_pos[:, self.total_leg_joint_ids],
                     self.prev_actions["leg"],
@@ -148,9 +142,6 @@ class R1InterventionEnv(R1BaseEnv):
                 self._robot.data.root_lin_vel_b,
                 self._robot.data.root_ang_vel_b,
                 self._robot.data.projected_gravity_b,
-                # self.commands.command_b,
-                # self.phase_sin.unsqueeze(-1),
-                # self.phase_cos.unsqueeze(-1),
                 self._robot.data.joint_pos - self._robot.data.default_joint_pos,
                 self._robot.data.joint_vel,
                 self.prev_actions,
@@ -166,9 +157,6 @@ class R1InterventionEnv(R1BaseEnv):
                 self._robot.data.root_lin_vel_b,
                 self._robot.data.root_ang_vel_b,
                 self._robot.data.projected_gravity_b,
-                # self.commands.command_b,
-                # self.phase_sin.unsqueeze(-1),
-                # self.phase_cos.unsqueeze(-1),
                 self._robot.data.joint_pos[:, total_joint_ids] - self._robot.data.default_joint_pos[:, total_joint_ids],
                 self._robot.data.joint_vel[:, total_joint_ids],
             ], dim=-1)
@@ -183,9 +171,6 @@ class R1InterventionEnv(R1BaseEnv):
                 self._robot.data.root_lin_vel_b,
                 self._robot.data.root_ang_vel_b,
                 self._robot.data.projected_gravity_b,
-                # self.commands.command_b,
-                # self.phase_sin.unsqueeze(-1),
-                # self.phase_cos.unsqueeze(-1),
                 self._robot.data.joint_pos - self._robot.data.default_joint_pos,
                 self._robot.data.joint_vel,
             ], dim=-1)
@@ -219,11 +204,11 @@ class R1InterventionEnv(R1BaseEnv):
         l_lin_vel = torch.where(base_lin_vel < self.cfg.lin_vel_thr,
                                 (base_lin_vel - self.cfg.lin_vel_thr) / self.cfg.lin_vel_thr,
                                 (base_lin_vel - self.cfg.lin_vel_thr) / (self.cfg.lin_vel_max - self.cfg.lin_vel_thr))
-        l_tilt = torch.where(base_tilt < self.cfg.target_tilt,
-                            (base_tilt - self.cfg.target_tilt) / self.cfg.target_tilt,
-                            (base_tilt - self.cfg.target_tilt) / (self.cfg.phi_thr - self.cfg.target_tilt))
+        # l_tilt = torch.where(base_tilt < self.cfg.target_tilt,
+        #                     (base_tilt - self.cfg.target_tilt) / self.cfg.target_tilt,
+        #                     (base_tilt - self.cfg.target_tilt) / (self.cfg.phi_thr - self.cfg.target_tilt))
 
-        return torch.stack([l_ang_vel, l_lin_vel, l_tilt], dim=-1).max(dim=-1).values.clamp(max=1.5)
+        return torch.stack([l_ang_vel, l_lin_vel], dim=-1).max(dim=-1).values.clamp(max=1.5)
 
 
     def _get_rewards(self) -> torch.Tensor:
@@ -240,11 +225,6 @@ class R1InterventionEnv(R1BaseEnv):
         self._compute_intermediate_values()
 
         time_out = self.episode_length_buf >= self.max_episode_length - 1
-
-        # critical_contact_forces = torch.norm(self.contact_sensors.data.net_forces_w_history[:, :, self.denied_collision_link_ids], dim=-1)
-        # died_fall = self.root_pos_w[:, 2] <= self.cfg.termination_height
-        # died_collision = torch.any(torch.any(critical_contact_forces > 1.0, dim=-1), dim=-1)
-
         died = self._get_safety_values().squeeze(-1) > 0.1
 
         return died, time_out
