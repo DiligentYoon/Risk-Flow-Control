@@ -164,7 +164,7 @@ class R1InterventionEnv(R1BaseEnv):
                             (base_tilt - self.cfg.target_tilt) / self.cfg.target_tilt,
                             (base_tilt - self.cfg.target_tilt) / (self.cfg.phi_thr - self.cfg.target_tilt))
 
-        return torch.stack([l_ang_vel, l_lin_vel], dim=-1).max(dim=-1).values.clamp(max=2.0)
+        return torch.stack([l_ang_vel, l_lin_vel, l_tilt], dim=-1).max(dim=-1).values.clamp(max=2.0)
 
 
     def _get_rewards(self) -> torch.Tensor:
