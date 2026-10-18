@@ -1,8 +1,3 @@
-# Reference (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
-# All rights reserved.
-#
-# SPDX-License-Identifier: BSD-3-Clause
-
 from __future__ import annotations
 
 import isaaclab.sim as sim_utils
@@ -20,6 +15,7 @@ from isaaclab.markers.config import FRAME_MARKER_CFG
 
 from assets.robots.R1.R1 import R1_CFG
 
+from lib.assets.robots.R1.R1 import R1_CFG
 from lib.domain_randomizer import randomizer
 
 from ..mdp.randomizer import reset_state_from_dataset
