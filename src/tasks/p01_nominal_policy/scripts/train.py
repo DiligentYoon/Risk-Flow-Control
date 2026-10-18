@@ -265,8 +265,9 @@ def main():
     # Reset environment
     obs, states, infos = env.reset()
     timestep = 0
-    rollout = 0
     elapsed_time = 0
+    CLI_logging_step = 0
+    CLI_logging_interval = min(512, max(128, buffer.buffer_size))
     
     # Simulate environment
     while simulation_app.is_running() and timestep <= cfg["train"]["timesteps"]:
@@ -293,15 +294,13 @@ def main():
                               infos=infos)
         
         # Parameter update
-        if timestep % agent.buffer.buffer_size == 0:
-            if agent.buffer.memory_index == 0:
+        if timestep % buffer.buffer_size == 0:
+            if buffer.memory_index == 0:
                 t2_rollout = time.time()
 
                 t1_update = time.time()
                 policy_loss, value_loss, entropy_loss, approx_kl, learning_rate = agent.update()
                 t2_update = time.time()
-
-                rollout += 1
             else:
                 raise RuntimeError("Discrepency appears between Buffer Logic and Rollout Policy.")
             
@@ -376,7 +375,8 @@ def main():
             tracking_data.clear()
 
         # CLI Logging about the training process at each parameter update
-        if timestep % agent.buffer.buffer_size == 0 and agent.buffer.memory_index == 0:
+        if timestep % CLI_logging_interval == 0:
+            CLI_logging_step += 1
             per_step_reward = float(np.mean(CLI_step_reward_means)) if len(CLI_step_reward_means) else float("nan")
             avg_ep_step = float(np.mean(CLI_track_timesteps)) if len(CLI_track_timesteps) else float("nan")
             avg_ep_reward = float(np.mean(CLI_track_rewards)) if len(CLI_track_rewards) else float("nan")
@@ -389,8 +389,8 @@ def main():
             e_h = int(elapsed_time // 3600)
             e_m = int((elapsed_time % 3600) // 60)
             e_s = int(elapsed_time % 60)
-            total_rollout = int(cfg["train"]["timesteps"] // buffer.buffer_size)
-            complete_time = (t2_rollout + t2_update - t1_rollout - t1_update) * (total_rollout - rollout)
+            total_rollout = int(cfg["train"]["timesteps"] // CLI_logging_interval)
+            complete_time = (t2_rollout + t2_update - t1_rollout - t1_update) * (total_rollout - CLI_logging_step)
             c_h = int(complete_time // 3600)
             c_m = int((complete_time % 3600) // 60)
             c_s = int(complete_time % 60)

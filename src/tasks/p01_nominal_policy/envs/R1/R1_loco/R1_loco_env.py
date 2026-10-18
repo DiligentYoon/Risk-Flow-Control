@@ -40,6 +40,7 @@ class R1LocoEnv(R1BaseEnv):
         self.projected_gravity = torch.zeros((self.num_envs, 3), dtype=torch.float, device=self.device)
         self.joint_pos = torch.zeros((self.num_envs, self._robot.num_joints), dtype=torch.float, device=self.device)
         self.joint_vel = torch.zeros((self.num_envs, self._robot.num_joints), dtype=torch.float, device=self.device)
+        self.joint_acc = torch.zeros((self.num_envs, self._robot.num_joints), dtype=torch.float, device=self.device)
         self.command_inputs_b = torch.zeros((self.num_envs, 3), dtype=torch.float, device=self.device)
         self.command_heading = torch.zeros((self.num_envs, 1), dtype=torch.float, device=self.device)
         self.contact_time = torch.zeros((self.num_envs, 2), dtype=torch.float, device=self.device)
@@ -223,7 +224,7 @@ class R1LocoEnv(R1BaseEnv):
         support_xy_penalty = -torch.sum(support_xy, dim=-1)
 
         joint_deviation_penalty_hip_xz = -torch.sum(torch.abs(self.joint_deviations[:, self.hip_xz_joint_ids]), dim=-1)
-        joint_deviation_penalty_arm = -torch.sum(torch.abs(self.joint_deviations[:, self.total_arm_joint_ids]), dim=1)
+        joint_deviation_penalty_arm = -torch.sum(torch.abs(self.joint_deviations[:, self.deviation_arm_joint_ids]), dim=1)
         joint_deviation_penalty_swing = -torch.sum(torch.abs(self.joint_deviations[:, self.swing_arm_joint_ids]), dim=1) * torch.exp(-torch.norm(self.root_ang_vel_b, dim=1) / 0.5)
 
         ang_vel_xy_penalty = -torch.sum(torch.square(self.root_ang_vel_b[:, :2]), dim=1)
@@ -233,6 +234,7 @@ class R1LocoEnv(R1BaseEnv):
         joint_torque_limit_penalty_leg = -torch.sum(self.out_of_limits_torque[:, self.total_leg_joint_ids], dim=1)
         joint_torque_penalty_leg = -torch.sum(torch.square(self._robot.data.applied_torque[:, self.total_leg_joint_ids]), dim=1)
         joint_vel_penalty_leg = -torch.sum(torch.square(self.joint_vel[:, self.total_leg_joint_ids]), dim=1)
+        joint_acc_penalty_leg = -torch.sum(torch.square(self.joint_acc[:, self.total_leg_joint_ids]), dim=1)
 
         if self.cfg.num_agents > 1:
             action_rate_penalty_leg = -torch.sum(torch.square(self.actions["leg"] - self.prev_actions["leg"]), dim=1)
@@ -243,6 +245,7 @@ class R1LocoEnv(R1BaseEnv):
         joint_torque_limit_penalty_arm = -torch.sum(self.out_of_limits_torque[:, self.total_arm_joint_ids], dim=1)
         joint_torque_penalty_arm = -torch.sum(torch.square(self._robot.data.applied_torque[:, self.total_arm_joint_ids]), dim=1)
         joint_vel_penalty_arm = -torch.sum(torch.square(self.joint_vel[:, self.total_arm_joint_ids]), dim=1)
+        joint_acc_penalty_arm = -torch.sum(torch.square(self.joint_acc[:, self.total_arm_joint_ids]), dim=1)
 
         if self.cfg.num_agents > 1:
             action_rate_penalty_arm = -torch.sum(torch.square(self.actions["arm"] - self.prev_actions["arm"]), dim=1)
@@ -266,6 +269,7 @@ class R1LocoEnv(R1BaseEnv):
             + self.cfg.p_joint_torque_limit * joint_torque_limit_penalty_arm
             + self.cfg.p_joint_torque * joint_torque_penalty_arm
             + self.cfg.p_joint_vel * joint_vel_penalty_arm
+            + self.cfg.p_joint_acc * joint_acc_penalty_arm
             + self.cfg.p_action_rate * action_rate_penalty_arm
         )
 
@@ -278,6 +282,7 @@ class R1LocoEnv(R1BaseEnv):
             + self.cfg.p_joint_torque_limit * joint_torque_limit_penalty_leg
             + self.cfg.p_joint_torque * joint_torque_penalty_leg
             + self.cfg.p_joint_vel * joint_vel_penalty_leg
+            + self.cfg.p_joint_acc * joint_acc_penalty_leg
             + self.cfg.p_action_rate * action_rate_penalty_leg
         )
 
@@ -324,7 +329,6 @@ class R1LocoEnv(R1BaseEnv):
         critical_contact_forces = torch.norm(self.contact_sensors.data.net_forces_w_history[:, :, self.denied_collision_link_ids], dim=-1)
         died_fall = self.root_pos_w[:, 2] <= self.cfg.termination_height
         died_collision = torch.any(torch.any(critical_contact_forces > 1.0, dim=-1), dim=-1)
-        # died_ang = (torch.norm(self.root_ang_vel_b[:, :3], dim=-1) >= self.cfg.termination_ang_vel)
 
         died = (died_fall & died_collision)
 
@@ -370,6 +374,7 @@ class R1LocoEnv(R1BaseEnv):
 
         self.joint_pos[i] = self._robot.data.joint_pos[i]
         self.joint_vel[i] = self._robot.data.joint_vel[i]
+        self.joint_acc[i] = self._robot.data.joint_acc[i]
 
         self.command_inputs_b[i] = self.commands.command_b[i]
         self.command_heading[i] = self.commands.heading[i]
@@ -418,6 +423,40 @@ class R1LocoEnv(R1BaseEnv):
 
         self.out_of_limits_torque[i] = (torch.abs(self._robot.data.applied_torque[i]) - self._robot.data.joint_effort_limits[i] * self.cfg.soft_torque_limit).clip(min=0.0)
         self.joint_deviations[i] = self.joint_pos[i] - self._robot.data.default_joint_pos[i]
+
+    def _update_viz_data(self):
+        extras = copy.deepcopy(self.extras)
+
+        # Leg
+        extras["viz_data"]["left_hip_pitch_joint_torque (Nm)"] = self._robot.data.applied_torque[:, self._robot.find_joints("left_hip_pitch_joint")[0]]
+        extras["viz_data"]["right_hip_pitch_joint_torque (Nm)"] = self._robot.data.applied_torque[:, self._robot.find_joints("right_hip_pitch_joint")[0]]
+        extras["viz_data"]["left_hip_roll_joint_torque (Nm)"] = self._robot.data.applied_torque[:, self._robot.find_joints("left_hip_roll_joint")[0]]
+        extras["viz_data"]["right_hip_roll_joint_torque (Nm)"] = self._robot.data.applied_torque[:, self._robot.find_joints("right_hip_roll_joint")[0]]
+        extras["viz_data"]["left_hip_yaw_joint_torque (Nm)"] = self._robot.data.applied_torque[:, self._robot.find_joints("left_hip_yaw_joint")[0]]
+        extras["viz_data"]["right_hip_yaw_joint_torque (Nm)"] = self._robot.data.applied_torque[:, self._robot.find_joints("right_hip_yaw_joint")[0]]
+        extras["viz_data"]["left_knee_joint_torque (Nm)"] = self._robot.data.applied_torque[:, self._robot.find_joints("left_knee_joint")[0]]
+        extras["viz_data"]["right_knee_joint_torque (Nm)"] = self._robot.data.applied_torque[:, self._robot.find_joints("right_knee_joint")[0]]
+        extras["viz_data"]["left_ankle_pitch_joint_torque (Nm)"] = self._robot.data.applied_torque[:, self._robot.find_joints("left_ankle_pitch_joint")[0]]
+        extras["viz_data"]["right_ankle_pitch_joint_torque (Nm)"] = self._robot.data.applied_torque[:, self._robot.find_joints("right_ankle_pitch_joint")[0]]
+        extras["viz_data"]["left_ankle_roll_joint_torque (Nm)"] = self._robot.data.applied_torque[:, self._robot.find_joints("left_ankle_roll_joint")[0]]
+        extras["viz_data"]["right_ankle_roll_joint_torque (Nm)"] = self._robot.data.applied_torque[:, self._robot.find_joints("right_ankle_roll_joint")[0]]
+
+        # Arm
+        extras["viz_data"]["waist_roll_joint_torque (Nm)"] = self._robot.data.applied_torque[:, self._robot.find_joints("waist_roll_joint")[0]]
+        extras["viz_data"]["waist_yaw_joint_torque (Nm)"] = self._robot.data.applied_torque[:, self._robot.find_joints("waist_yaw_joint")[0]]
+        extras["viz_data"]["left_shoulder_pitch_joint_torque (Nm)"] = self._robot.data.applied_torque[:, self._robot.find_joints("left_shoulder_pitch_joint")[0]]
+        extras["viz_data"]["right_shoulder_pitch_joint_torque (Nm)"] = self._robot.data.applied_torque[:, self._robot.find_joints("right_shoulder_pitch_joint")[0]]
+        extras["viz_data"]["left_shoulder_roll_joint_torque (Nm)"] = self._robot.data.applied_torque[:, self._robot.find_joints("left_shoulder_roll_joint")[0]]
+        extras["viz_data"]["right_shoulder_roll_joint_torque (Nm)"] = self._robot.data.applied_torque[:, self._robot.find_joints("right_shoulder_roll_joint")[0]]
+        extras["viz_data"]["left_shoulder_yaw_joint_torque (Nm)"] = self._robot.data.applied_torque[:, self._robot.find_joints("left_shoulder_yaw_joint")[0]]
+        extras["viz_data"]["right_shoulder_yaw_joint_torque (Nm)"] = self._robot.data.applied_torque[:, self._robot.find_joints("right_shoulder_yaw_joint")[0]]
+        extras["viz_data"]["left_elbow_joint_torque (Nm)"] = self._robot.data.applied_torque[:, self._robot.find_joints("left_elbow_joint")[0]]
+        extras["viz_data"]["right_elbow_joint_torque (Nm)"] = self._robot.data.applied_torque[:, self._robot.find_joints("right_elbow_joint")[0]]
+        extras["viz_data"]["left_wrist_roll_joint_torque (Nm)"] = self._robot.data.applied_torque[:, self._robot.find_joints("left_wrist_roll_joint")[0]]
+        extras["viz_data"]["right_wrist_roll_joint_torque (Nm)"] = self._robot.data.applied_torque[:, self._robot.find_joints("right_wrist_roll_joint")[0]]
+
+        return extras
+
 
 @torch.jit.script
 def wrap_to_pi(angles):

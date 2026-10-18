@@ -50,7 +50,6 @@ class R1BaseEnv(Env):
                     r".*_shoulder_(pitch|roll|yaw)_joint",
                     r".*_elbow_joint",
                     r".*_wrist_roll_joint",
-                    r"head_(pitch|yaw)_joint",
                 ]
             )
         )
@@ -62,10 +61,9 @@ class R1BaseEnv(Env):
             self._robot.find_joints(
                 [
                     r"waist_(roll|yaw)_joint",
-                    r".*_shoulder_(roll|yaw)_joint",
-                    # r".*_elbow_joint",
+                    r".*_shoulder_(pitch|roll|yaw)_joint",
+                    r".*_elbow_joint",
                     r".*_wrist_roll_joint",
-                    r"head_(pitch|yaw)_joint",
                 ]
             )
         )
@@ -107,13 +105,6 @@ class R1BaseEnv(Env):
             ]
         )
 
-        # Head joints
-        self.head_joint_ids, _ = self._robot.find_joints(
-            [
-                r"head_(pitch|yaw)_joint",
-            ]
-        )
-
         # Link IDs
         self.torso_link_ids, _ = self._robot.find_bodies(
             [
@@ -144,15 +135,6 @@ class R1BaseEnv(Env):
             self.contact_sensors.find_bodies(
                 [
                     r".*_ankle_roll_link",
-                ]
-            )
-        )
-
-        # Head contact
-        self.head_contact_link_ids, _ = (
-            self.contact_sensors.find_bodies(
-                [
-                    r"head_(pitch|yaw)_link",
                 ]
             )
         )

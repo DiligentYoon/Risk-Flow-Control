@@ -23,8 +23,8 @@ class R1InterventionEnvCfg(R1BaseEnvCfg):
 
     ## ========== Multi Agent Setting =========== ##
     # possible_agents = ["arm", "leg"]
-    # action_space = {"arm": 14, "leg": 12}
-    # observation_space = {"arm": 56, "leg": 50}
+    # action_space = {"arm": 12, "leg": 12}
+    # observation_space = {"arm": 50, "leg": 50}
     # state_space = {"arm": 93, "leg": 93}
     # num_agents = 2
     # action_scale_factor = {"arm": [0.5, ()],
@@ -32,8 +32,8 @@ class R1InterventionEnvCfg(R1BaseEnvCfg):
 
     ## ========== Single Agent Setting ========== ##
     action_space = 26
-    observation_space = 87
-    state_space = 62
+    observation_space = 81
+    state_space = 58
     num_agents = 1
     action_scale_factor = 2.0
 

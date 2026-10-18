@@ -13,8 +13,6 @@ from isaaclab.managers import SceneEntityCfg
 from isaaclab.markers import VisualizationMarkersCfg
 from isaaclab.markers.config import FRAME_MARKER_CFG
 
-from assets.robots.R1.R1 import R1_CFG
-
 from lib.assets.robots.R1.R1 import R1_CFG
 from lib.domain_randomizer import randomizer
 

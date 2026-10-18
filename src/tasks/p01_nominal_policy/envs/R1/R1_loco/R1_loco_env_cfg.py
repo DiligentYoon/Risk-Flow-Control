@@ -18,19 +18,19 @@ class R1LocoEnvCfg(R1BaseEnvCfg):
     decimation = 4
 
     ## ========== Multi Agent Setting =========== ##
-    # possible_agents = ["arm", "leg"]
-    # action_space = {"arm": 14, "leg": 12}
-    # observation_space = {"arm": 56, "leg": 50}
-    # state_space = {"arm": 93, "leg": 93}
-    # num_agents = 2
-    # action_scale_factor = {"arm": [0.5, ()],
-    #                        "leg": [0.5, ()]}
+    possible_agents = ["arm", "leg"]
+    action_space = {"arm": 12, "leg": 12}
+    observation_space = {"arm": 50, "leg": 50}
+    state_space = {"arm": 87, "leg": 87}
+    num_agents = 2
+    action_scale_factor = {"arm": [0.5, ()],
+                           "leg": [0.5, ()]}
 
     ## ========== Single Agent Setting ========== ##
-    action_space = 26
-    observation_space = 92
-    num_agents = 1
-    action_scale_factor = 0.5
+    # action_space = 26
+    # observation_space = 86
+    # num_agents = 1
+    # action_scale_factor = 0.5
 
     ## ==================== Reward Shaping ==================== ##
     r_track_lin_vel: float = 8.0
@@ -46,18 +46,16 @@ class R1LocoEnvCfg(R1BaseEnvCfg):
     p_joint_torque: float = 1.0e-7
     p_joint_torque_limit: float = 1.0e-5
     p_joint_vel: float = 1.0e-4
+    p_joint_acc: float = 1.0e-7
 
     p_limits: float = 10.0
     p_deviation_swing: float = 0.0
     p_deviation_hip: float = 2.0
     p_deviation_arm: float = 2.0
-    p_action_rate: float = 1.0e-3
+    p_action_rate: float = 5.0e-3
 
     p_termination: float = 200
     termination_height: float = 0.3
-    termination_gravity: float = 0.8
-    termination_ang_vel: float = 20.0
-
     target_height = 0.73
 
     # ===== Gait guidance ===== #
@@ -136,11 +134,38 @@ class R1LocoPlayEnvCfg(R1LocoEnvCfg):
             lookat=(0.0, 0.0, 0.0),
         )
 
-        self.scene.num_envs = 1
+        self.plotter = PNGSavePlotter
 
-        # self.events.push_robot.params["velocity_range"] = {
-        #     "x": (-0.5, 0.5),
-        #     "y": (-0.5, 0.5),
-        #     "roll": (-1.0, 1.0),
-        #     "pitch": (-1.0, 1.0),
-        # }
+# left_hip_pitch_joint, left_hip_roll_link, left_hip_yaw_joint, left_knee_joint, left_ankle_pitch_joint, left_ankle_roll_joint
+
+        self.viz_data = {
+            # Leg
+            "left_hip_pitch_joint_torque (Nm)": 0.0,
+            "right_hip_pitch_joint_torque (Nm)": 0.0,
+            "left_hip_roll_joint_torque (Nm)": 0.0,
+            "right_hip_roll_joint_torque (Nm)": 0.0,
+            "left_hip_yaw_joint_torque (Nm)": 0.0,
+            "right_hip_yaw_joint_torque (Nm)": 0.0,
+            "left_knee_joint_torque (Nm)": 0.0,
+            "right_knee_joint_torque (Nm)": 0.0,
+            "left_ankle_pitch_joint_torque (Nm)": 0.0,
+            "right_ankle_pitch_joint_torque (Nm)": 0.0,
+            "left_ankle_roll_joint_torque (Nm)": 0.0,
+            "right_ankle_roll_joint_torque (Nm)": 0.0,
+
+            # Arm
+            "waist_roll_joint_torque (Nm)": 0.0,
+            "waist_yaw_joint_torque (Nm)": 0.0,
+            "left_shoulder_pitch_joint_torque (Nm)": 0.0,
+            "right_shoulder_pitch_joint_torque (Nm)": 0.0,
+            "left_shoulder_roll_joint_torque (Nm)": 0.0,
+            "right_shoulder_roll_joint_torque (Nm)": 0.0,
+            "left_shoulder_yaw_joint_torque (Nm)": 0.0,
+            "right_shoulder_yaw_joint_torque (Nm)": 0.0,
+            "left_elbow_joint_torque (Nm)": 0.0,
+            "right_elbow_joint_torque (Nm)": 0.0,
+            "left_wrist_roll_joint_torque (Nm)": 0.0,
+            "right_wrist_roll_joint_torque (Nm)": 0.0,
+        }
+
+        self.scene.num_envs = 1

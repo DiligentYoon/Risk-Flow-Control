@@ -24,27 +24,26 @@ class R1FallEnvCfg(R1BaseEnvCfg):
 
     ## ========== Multi Agent Setting =========== ##
     possible_agents = ["arm", "leg"]
-    action_space = {"arm": 14, "leg": 12}
-    observation_space = {"arm": 56, "leg": 50}
-    state_space = {"arm": 93, "leg": 93}
+    action_space = {"arm": 12, "leg": 12}
+    observation_space = {"arm": 50, "leg": 50}
+    state_space = {"arm": 87, "leg": 87}
     num_agents = 2
     action_scale_factor = {"arm": [0.5, ()],
                            "leg": [0.5, ()]}
 
     ## ========== Single Agent Setting ========== ##
-    # action_space = 26
-    # observation_space = 92
+    # action_space = 24
+    # observation_space = 86
     # num_agents = 1
     # action_scale_factor = 0.5
 
     # ===== Gait guidance ===== #
-    time_period = 0.35
+    time_period = 0.45
 
     # === safety value config === #
-    safety_state_space = 61
+    safety_state_space = 57
 
-    termination_height  = 0.35
-    termination_ang_vel = 20.0
+    termination_height  = 0.3
     phi_max = 3.14/4
 
     ## ============== Self collision =============== ##
