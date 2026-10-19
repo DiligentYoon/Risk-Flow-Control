@@ -34,8 +34,7 @@ class R1LocoEnvCfg(R1BaseEnvCfg):
 
     ## ==================== Reward Shaping ==================== ##
     r_track_lin_vel: float = 8.0
-    r_track_ang_vel: float = 8.0
-    r_track_heading: float = 0.0
+    r_track_ang_vel: float = 10.0
     r_track_height: float = 2.0
     r_feet_gait: float = 10.0
     r_flat: float = 2.0
@@ -46,7 +45,7 @@ class R1LocoEnvCfg(R1BaseEnvCfg):
     p_joint_torque: float = 1.0e-7
     p_joint_torque_limit: float = 1.0e-5
     p_joint_vel: float = 1.0e-4
-    p_joint_acc: float = 1.0e-7
+    p_joint_acc: float = 1.0e-8
 
     p_limits: float = 10.0
     p_deviation_swing: float = 0.0

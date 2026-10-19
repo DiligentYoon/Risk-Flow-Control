@@ -202,12 +202,10 @@ class R1LocoEnv(R1BaseEnv):
     def _get_rewards(self) -> torch.Tensor:
         lin_vel_error = torch.sum(torch.square(self.command_inputs_b[:, :2] - self.root_lin_vel_b[:, :2]), dim=-1)
         ang_vel_error = torch.abs(self.command_inputs_b[:, 2] - self.root_ang_vel_b[:, 2])
-        heading_error = torch.square(wrap_to_pi(self.command_heading[:, 0] - self.root_heading[:, 0]))
         height_error = torch.square(self.root_pos_w[:, 2] - self.cfg.target_height)
 
         lin_vel_rewards = torch.exp(-lin_vel_error / 0.2)
         ang_vel_rewards = torch.exp(-ang_vel_error / 0.5)
-        heading_rewards = torch.exp(-heading_error / 0.1)
         height_rewards = torch.exp(-height_error / 0.1)
 
         tilting = torch.sum(torch.square(self.projected_gravity[:, :2]), dim=1)
@@ -258,7 +256,6 @@ class R1LocoEnv(R1BaseEnv):
             + self.cfg.r_track_height * height_rewards
             + self.cfg.p_ang_vel_xy * ang_vel_xy_penalty
             + self.cfg.p_lin_vel_z * lin_vel_z_penalty
-            + self.cfg.r_track_heading * heading_rewards
             + self.cfg.p_termination * terminate_penalty
         )
 
@@ -298,7 +295,6 @@ class R1LocoEnv(R1BaseEnv):
         self.extras["reward"] = {
             "Task Reward / Common_Angular_Velocity": ang_vel_rewards,
             "Task Reward / Common_Flat": flat_rewards,
-            "Task Reward / Common_Heading": heading_rewards,
             "Task Reward / Leg_Gait": gait_reward,
             "Task Reward / Leg_Linear_Velocity": lin_vel_rewards,
             "Task Penalty / Common_Ang_Vel_XY": ang_vel_xy_penalty,
@@ -309,6 +305,7 @@ class R1LocoEnv(R1BaseEnv):
             "Task Penalty / Arm_Torque_Limit": joint_torque_limit_penalty_arm,
             "Task Penalty / Arm_Torque": joint_torque_penalty_arm,
             "Task Penalty / Arm_Vel": joint_vel_penalty_arm,
+            "Task Penalty / Arm_Acc": joint_acc_penalty_arm,
             "Task Penalty / Arm_Action_Rate": action_rate_penalty_arm,
             "Task Penalty / Leg_Support_XY": support_xy_penalty,
             "Task Penalty / Leg_Hip_XZ_Deviation": joint_deviation_penalty_hip_xz,
@@ -316,6 +313,7 @@ class R1LocoEnv(R1BaseEnv):
             "Task Penalty / Leg_Torque_Limit": joint_torque_limit_penalty_leg,
             "Task Penalty / Leg_Torque": joint_torque_penalty_leg,
             "Task Penalty / Leg_Vel": joint_vel_penalty_leg,
+            "Task Penalty / Leg_Acc": joint_acc_penalty_leg,
             "Task Penalty / Leg_Action_Rate": action_rate_penalty_leg,
         }
 

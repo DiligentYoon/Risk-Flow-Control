@@ -51,4 +51,4 @@ agent:
     checkpoint_interval: auto
 
 train:
-  timesteps: 52000
+  timesteps: 72000
