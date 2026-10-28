@@ -61,12 +61,12 @@ class EventCfg:
     push_robot = EventTerm(
         func=randomizer.push_by_setting_velocity,
         mode="interval",
-        interval_range_s=(3.0, 4.0),
+        interval_range_s=(4.0, 5.0),
         params={
             "asset_cfg": SceneEntityCfg("robot", body_names="waist_yaw_link",),
             "velocity_range": {
-                "x": (-1.0, 1.0),
-                "y": (-1.0, 1.0),
+                "x": (-0.5, 0.5),
+                "y": (-0.5, 0.5),
                 "roll": (-1.0, 1.0),
                 "pitch": (-1.0, 1.0),
             },
