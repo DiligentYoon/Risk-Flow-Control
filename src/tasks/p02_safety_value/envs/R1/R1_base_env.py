@@ -7,11 +7,12 @@ import torch
 from isaaclab.assets import Articulation
 from isaaclab.sensors import ContactSensor
 
-from ..safe_value_env import SafeValueEnv
+from lib.env.env import Env
+
 from .R1_base_env_cfg import R1BaseEnvCfg
 
 
-class R1BaseEnv(SafeValueEnv):
+class R1BaseEnv(Env):
 
     # Load config file
     cfg: R1BaseEnvCfg
@@ -42,7 +43,7 @@ class R1BaseEnv(SafeValueEnv):
         )
 
         # Upper-body joints
-        self.total_arm_joint_ids, self.total_arm_joint_names = (
+        self.total_arm_joint_ids, _ = (
             self._robot.find_joints(
                 [
                     r"waist_(roll|yaw)_joint",
@@ -54,6 +55,25 @@ class R1BaseEnv(SafeValueEnv):
         )
 
         # Specific joint groups
+
+        # Upper-body without pitch
+        self.deviation_arm_joint_ids, _ = (
+            self._robot.find_joints(
+                [
+                    r"waist_(roll|yaw)_joint",
+                    r".*_shoulder_(pitch|roll|yaw)_joint",
+                    r".*_elbow_joint",
+                    r".*_wrist_roll_joint",
+                ]
+            )
+        )
+
+        self.swing_arm_joint_ids, _ = self._robot.find_joints(
+            [
+                r".*_shoulder_pitch_joint",
+                r".*_elbow_joint",
+            ]
+        )
 
         # Hip yaw / roll
         self.hip_xz_joint_ids, _ = self._robot.find_joints(
@@ -75,23 +95,6 @@ class R1BaseEnv(SafeValueEnv):
             [
                 r".*_ankle_pitch_joint",
                 r".*_ankle_roll_joint",
-            ]
-        )
-
-        # Hip + knee
-        self.hip_knee_all_joint_ids, _ = self._robot.find_joints(
-            [
-                r".*_hip_(pitch|roll|yaw)_joint",
-                r".*_knee_joint",
-            ]
-        )
-
-        # Physical arm joints only
-        self.arm_all_joint_ids, _ = self._robot.find_joints(
-            [
-                r".*_shoulder_(pitch|roll|yaw)_joint",
-                r".*_elbow_joint",
-                r".*_wrist_roll_joint",
             ]
         )
 
@@ -233,16 +236,6 @@ class R1BaseEnv(SafeValueEnv):
                 "so '_get_states' must be implemented to return privileged critic states.")
         else:
             return None  # noqa: R501
-
-    @abstractmethod
-    def _get_safety_states(self) -> torch.Tensor:
-        """Compute and return the safety states for the safety value networks.
-
-        Returns:
-            The states for the safety value networks. If the environment does not have a state-space, the function
-            returns a None.
-        """
-        raise NotImplementedError(f"Please implement the '_get_safety_states' method for {self.__class__.__name__}.")
 
     @abstractmethod
     def _get_rewards(self) -> torch.Tensor:

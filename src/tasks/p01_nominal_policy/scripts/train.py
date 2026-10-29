@@ -267,7 +267,7 @@ def main():
     timestep = 0
     elapsed_time = 0
     CLI_logging_step = 0
-    CLI_logging_interval = min(512, max(128, buffer.buffer_size))
+    CLI_logging_interval = min(512, max(256, buffer.buffer_size))
     
     # Simulate environment
     while simulation_app.is_running() and timestep <= cfg["train"]["timesteps"]:

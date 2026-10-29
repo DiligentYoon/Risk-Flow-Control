@@ -21,7 +21,7 @@ from isaaclab.markers.config import FRAME_MARKER_CFG
 from lib.env.env_cfg import EnvCfg
 from lib.domain_randomizer import randomizer
 
-from assets.robots.R1.R1 import R1_CFG
+from lib.assets.robots.R1.R1 import R1_CFG
 
 
 @configclass
