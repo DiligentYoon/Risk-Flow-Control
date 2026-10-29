@@ -252,7 +252,7 @@ def main():
 
     # ====================== Rollout Collection =============================== #
 
-    obs, _, _, infos = env.reset()
+    obs, _, _, _, infos = env.reset()
 
     CLI_interval = 300
     CLI_num_written = 0

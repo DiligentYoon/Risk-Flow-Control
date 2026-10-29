@@ -63,7 +63,7 @@ class SafeValueEnv(Env):
 
     def reset(
         self, seed: int | None = None, options: dict[str, Any] | None = None
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, dict]:
         """Reset all environments and return observations along with the safety-state input.
 
         There is no preceding step at reset time, so the snapshots are set to the initial state.
@@ -75,11 +75,12 @@ class SafeValueEnv(Env):
         obs, states, extras = super().reset(seed=seed, options=options)
 
         self.safety_state_buf = self._get_safety_states()
+        self.safety_value_buf = self._get_safety_values()
         self.push_event_buf.zero_()
 
         extras = dict(self.extras)
 
-        return obs, states, self.safety_state_buf, extras
+        return obs, states, self.safety_state_buf, self.safety_value_buf, extras
 
     def step(
         self, action: Union[torch.Tensor, Dict[str, torch.Tensor]]

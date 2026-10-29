@@ -7,12 +7,12 @@ import torch
 from isaaclab.assets import Articulation
 from isaaclab.sensors import ContactSensor
 
-from lib.env.env import Env
+from ..safe_value_env import SafeValueEnv
 
 from .R1_base_env_cfg import R1BaseEnvCfg
 
 
-class R1BaseEnv(Env):
+class R1BaseEnv(SafeValueEnv):
 
     # Load config file
     cfg: R1BaseEnvCfg
@@ -236,6 +236,16 @@ class R1BaseEnv(Env):
                 "so '_get_states' must be implemented to return privileged critic states.")
         else:
             return None  # noqa: R501
+
+    @abstractmethod
+    def _get_safety_states(self) -> torch.Tensor:
+        """Compute and return the safety states for the safety value networks.
+
+        Returns:
+            The states for the safety value networks. If the environment does not have a state-space, the function
+            returns a None.
+        """
+        raise NotImplementedError(f"Please implement the '_get_safety_states' method for {self.__class__.__name__}.")
 
     @abstractmethod
     def _get_rewards(self) -> torch.Tensor:

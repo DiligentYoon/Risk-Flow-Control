@@ -1,0 +1,24 @@
+seed: 42
+
+train:
+  timesteps: 10000
+buffer:
+  buffer_size: 1024
+eval:
+  threshold: 0.0               # V(s) > 0 is the unsafe set by our formulation
+agent:
+  double_network: false
+  learning_epochs: 1
+  batch_size: 4096
+  discount_factor: 0.999
+  learning_rate: 5.0e-05
+  learning_starts: 1024
+  grad_norm_clip: 1.0
+  tau: 0.05
+
+# Initial-condition dataset collection
+collection:
+  capacity: 56000
+  max_timestep: 64000
+  persistent_risk_steps: 10
+  risk_threshold: 0.0

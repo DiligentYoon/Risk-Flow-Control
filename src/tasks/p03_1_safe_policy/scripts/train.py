@@ -1,7 +1,3 @@
-"""
-Script to train a Reach-avoid value function.
-"""
-
 """Launch Isaac Sim Simulator first."""
 
 import argparse
@@ -16,14 +12,20 @@ parser.add_argument("--video_length", type=int, default=500, help="Length of the
 parser.add_argument("--video_interval", type=int, default=2000, help="Interval between video recordings (in steps).")
 parser.add_argument("--disable_fabric", type=bool, default=False, help="Disable fabric and use USD I/O operations.")
 parser.add_argument("--num_envs", type=int, default=4096, help="Number of environments to simulate.")
-parser.add_argument("--task", type=str, default="R1-intervention", help="Name of the task.")
+parser.add_argument("--task", type=str, default="R1-safe", help="Name of the task.")
 parser.add_argument("--checkpoint", type=str, default=None, help="Path to model checkpoint.")
 parser.add_argument("--predictor_checkpoint", type=str, default=None, help="Path to safety value network checkpoint.")
-parser.add_argument("--initial_dataset", type=str, default=None, help="Path to Risk Initial dataset.")
+parser.add_argument("--initial_dataset", type=str, default="logs/r1_loco/2026-10-29_17-29-17_mappo/Predictor/2026-10-29_22-54-23/2026-10-29_23-01-25/collected/risk_init_dataset.pt", help="Path to Risk Initial dataset.")
+
+parser.add_argument("--algorithm",
+                    type=str,
+                    default="MAPPO",
+                    choices=["PPO", "SAC", "TD3", "MAPPO"],
+                    help="The RL algorithm used for training the agent.")
 
 parser.add_argument("--model",
                     type=str,
-                    default="MLP",
+                    default="Shared",
                     choices=["MLP", "Shared"],
                     help="The NN model used for training the agent.")
 
@@ -47,6 +49,7 @@ import os
 import time
 import torch
 import numpy as np
+import copy
 
 from torch.utils.tensorboard import SummaryWriter
 from datetime import datetime
@@ -56,7 +59,11 @@ import tasks
 
 from lib.utils.parse_utils import parse_env_cfg, load_cfg_from_registry
 
-from tasks.p03_safe_policy.wrappers.intervention_wrapper import InterventionEnvWrapper, InterventionEnvRecordVideo
+from tasks.p02_safety_value.wrappers.safety_wrapper import SafetyEnvWrapper, SafetyEnvRecordVideo
+
+# config shortcuts
+algorithm = args_cli.algorithm.lower()
+model = args_cli.model.lower() if args_cli.model is not None else None
 
 def main():
     # ============================= Config Parsing ===============================
@@ -64,7 +71,7 @@ def main():
     env_cfg = parse_env_cfg(
         args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs, use_fabric=not args_cli.disable_fabric)
     try:
-        cfg = load_cfg_from_registry(args_cli.task, f"rl_single_cfg_entry_point")
+        cfg = load_cfg_from_registry(args_cli.task, f"rl_{algorithm}_cfg_entry_point")
         pred_cfg = load_cfg_from_registry(args_cli.task, "predictor_cfg_entry_point")
     except ValueError as e:
         print(e)
@@ -76,7 +83,8 @@ def main():
 
     if args_cli.predictor_checkpoint is not None:
         predictor_checkpoint = os.path.abspath(args_cli.predictor_checkpoint)
-        log_dir = os.path.join(os.path.dirname(predictor_checkpoint), "intervention_policy", datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
+        log_dir = os.path.join(os.path.dirname(predictor_checkpoint), "safe_policy")
+        log_dir += datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + f"{algorithm}"
         os.makedirs(log_dir, exist_ok=True)
     else:
         log_dir = None
@@ -95,10 +103,10 @@ def main():
             "disable_logger": True,
         }
         print("[INFO] Recording videos during training.")
-        env = InterventionEnvRecordVideo(env, **video_kwargs)
+        env = SafetyEnvRecordVideo(env, **video_kwargs)
 
     # Wrap around environment
-    env = InterventionEnvWrapper(env)  
+    env = SafetyEnvWrapper(env)  
 
     # Interval
     if cfg["agent"]["experiment"]["write_interval"] == "auto":
@@ -115,21 +123,106 @@ def main():
                   "critic_2": SafetyCritic(num_states=num_safety_states, device=env.device)}
     pred_agent = Safety(model=pred_model, device=env.device, cfg=pred_cfg["agent"])
 
-    # ======================= Buffer & Model & Agent =========================
-    from tasks.p03_safe_policy.buffer.risk_flow_buffer import RiskFlowBuffer
-    from tasks.p03_safe_policy.agents.risk_flow import RiskFlow
-    from tasks.p03_safe_policy.models.risk_flow_models import MultiHorizonCritic, DeterministicActor
-
-    buffer = RiskFlowBuffer(buffer_size=cfg["buffer"]["buffer_size"], num_envs=env.num_envs, device=env.device)
-    buffer.init_buffer(env.observation_space, env.state_space, env.safety_state_space, env.action_space)
-
-    observation_dim = buffer.tensors["observations"].shape[-1]
-    state_dim = buffer.tensors["states"].shape[-1]
-    action_dim = buffer.tensors["actions"].shape[-1]
+    # ======================= Buffer =========================
+    from lib.buffer.rolloutbuffer import RolloutBuffer
+    from lib.model.model_factory import ModelFactory
+    multi_agent = algorithm == "mappo"
+    cfg["models"]["multi_agent"] = multi_agent
+    # Initialization
+    if cfg["buffer"]["buffer_size"] == -1:
+        cfg["buffer"]["buffer_size"] = cfg["agent"]["rollouts"]
+    else:
+        raise RuntimeError("Replaybuffer for Off-policy algorithm is not implemented yet.")
     
-    model =  {"critic": MultiHorizonCritic(state_dim, action_dim, cfg["agent"]["horizon"], device=env.device, output_gain=0.01),
-              "actor": DeterministicActor(observation_dim, action_dim, device=env.device, output_gain=0.01)}
-    agent = RiskFlow(model, buffer, pred_agent, device=env.device, cfg=cfg["agent"])
+    possible_agents = None
+    if multi_agent:
+        obs_size = {}
+        state_size = {}
+        act_size = {}
+        buffers = {}
+        possible_agents = env._unwrapped.cfg.possible_agents
+        num_agent = len(possible_agents)
+        for uid in possible_agents:
+            observation_space = env.observation_space[uid]
+            action_space = env.action_space[uid]
+            if env.state_space:
+                state_space = env.state_space[uid]
+                cfg["agent"]["async_actor_critic"] = True
+            else:
+                state_space = None
+                cfg["agent"]["async_actor_critic"] = False
+            
+            buffer = RolloutBuffer(cfg["buffer"]["buffer_size"], env.num_envs, device=env.device)
+            buffer.init_buffer(observation_space, state_space, action_space)
+            buffers[uid] = buffer
+            obs_size[uid] = buffer.tensors["observations"].shape[-1]
+            state_size[uid] = buffer.tensors["states"].shape[-1] if env.state_space else obs_size[uid]
+            act_size[uid] = buffer.tensors["actions"].shape[-1]
+
+    else:
+        observation_space = env.observation_space
+        action_space = env.action_space
+        if env.state_space:
+            state_space = env.state_space
+            cfg["agent"]["async_actor_critic"] = True
+        else:
+            state_space = None
+            cfg["agent"]["async_actor_critic"] = False
+        
+        buffer = RolloutBuffer(cfg["buffer"]["buffer_size"], env.num_envs, device=env.device)
+        buffer.init_buffer(observation_space, state_space, action_space)
+        obs_size = buffer.tensors["observations"].shape[-1]
+        state_size = buffer.tensors["states"].shape[-1] if env.state_space else obs_size
+        act_size = buffer.tensors["actions"].shape[-1]
+
+    # ====================== Model Spawn  ==========================
+    model = args_cli.model.lower() if args_cli.model is not None else None
+    # Overwrite cfg by cli argument
+    if model is not None:
+        cfg["models"]["model_type"] = model
+    
+    model_manager = ModelFactory(cfg=cfg["models"], device=env.device)
+    if model_manager.model_class == "mlp":
+        models = model_manager.generate_mlp_models(observation_size=obs_size,
+                                                   state_size=state_size,
+                                                   action_size=act_size,
+                                                   possible_agents=possible_agents)
+    else:
+        raise RuntimeError("Not supported class")
+
+    # ====================== Agent Spawn  ==========================
+    if multi_agent:
+        if model_manager.model_type == "mlp":
+            from lib.agent.mappo import MAPPO
+            agent = MAPPO(observation_space=env.observation_space,
+                          state_space=env.state_space,
+                          action_space=env.action_space,
+                          possible_agents=possible_agents,
+                          model=models,
+                          buffer=buffers,
+                          device=env.device,
+                          cfg=cfg["agent"])
+        
+        elif model_manager.model_type == "shared":
+            from lib.agent.cooperative_mappo import CooperativeMAPPO
+            agent = CooperativeMAPPO(observation_space=env.observation_space,
+                                    state_space=env.state_space,
+                                    action_space=env.action_space,
+                                    possible_agents=possible_agents,
+                                    model=models,
+                                    buffer=buffers,
+                                    device=env.device,
+                                    cfg=cfg["agent"])
+        
+        else:
+            raise RuntimeError("Unvalid model type.")
+
+    else:
+        from lib.agent.ppo import PPO
+        agent = PPO(model=models,
+                    buffer=buffer, 
+                    device=env.device,
+                    cfg=cfg["agent"])
 
     # ============================= Checkpoints ============================= #
     if args_cli.checkpoint is not None:
@@ -146,168 +239,228 @@ def main():
     else:
         print("[INFO] Unfortunately a pre-trained value network is not found for this task.")
 
-    # ====================== Training =============================== #
-    writer = SummaryWriter(log_dir=log_dir) if log_dir is not None else None
+    # Tensorboard Wrtier
+    writer = SummaryWriter(log_dir=log_dir)
+    cumulative_rewards = None
     cumulative_timesteps = None
     tracking_data = collections.defaultdict(list)
-    tracking_timesteps = collections.deque(maxlen=env.num_envs)
+    track_rewards = collections.deque(maxlen=env.num_envs)
+    track_timesteps = collections.deque(maxlen=env.num_envs)
+    CLI_track_rewards = collections.deque(maxlen=env.num_envs)
     CLI_track_timesteps = collections.deque(maxlen=env.num_envs)
+    CLI_step_reward_means = collections.deque(maxlen=env.num_envs)
+    t1_rollout = time.time()
+    t2_rollout = 0
+    t1_update = 0
+    t2_update = 0
 
+    # Reset environment
     obs, states, safety_states, _, infos = env.reset()
-
     timestep = 0
-    logstep = 0
     elapsed_time = 0
-    start_time = time.time()
-    CLI_interval = 100
+    CLI_logging_step = 0
+    CLI_logging_interval = min(512, max(256, buffer.buffer_size))
+    
+    current_pred_safety_value = pred_agent.predict(safety_states)
+    next_pred_safety_value    = torch.zeros_like(current_pred_safety_value, dtype=torch.float32, device=env.device)
+    
+    # Simulate environment
+    while simulation_app.is_running() and timestep <= cfg["train"]["timesteps"]:
 
-    try:
-        while (simulation_app.is_running() and timestep < cfg["train"]["timesteps"]):
-            with torch.inference_mode():
-                actions = agent.act(obs, deterministic=False)
-
-                (
-                    next_obs,
-                    next_states,
-                    next_safety_states,
-                    next_safety_values,
-                    final_obs,
-                    final_states,
-                    final_safety_states,
-                    final_safety_values,
-                    rewards,
-                    terminated,
-                    truncated,
-                    next_infos,
-                ) = env.step(actions)
-
+        # ================== Interaction Phase =====================
+        with torch.no_grad():
+            # agent stepping
+            actions, action_log_probs, _ = agent.act(obs, infos, timestep=timestep, deterministic=False)
+            # env stepping
+            (
+                next_obs,
+                next_states,
+                next_safety_states,
+                next_safety_values,
+                final_safety_states,
+                final_safety_values,
+                rewards,
+                terminated,
+                truncated,
+                final_push_events,
+                next_infos,
+            ) = env.step(actions)
+            # safety value-based reward
+            next_pred_safety_value = pred_agent.predict(final_safety_states)
+            delta_safety_reward = env._unwrapped.cfg.r_delta_safety * (current_pred_safety_value - next_pred_safety_value).clamp(min=-1, max=1)
+            # Add value-based reward
+            if multi_agent:
+                rewards = (rewards.reshape(-1, num_agent) + delta_safety_reward).reshape(-1, 1)
+            else:
+                rewards += delta_safety_reward
+            
+            # update rollout number
             timestep += 1
+        
+            # Insert data to the buffer
+            agent.insert_data(observations=obs,
+                              states=states,
+                              actions=actions,
+                              action_log_probs=action_log_probs.reshape(-1, 1),
+                              rewards=rewards,
+                              next_observations=next_obs,
+                              next_states=next_states,
+                              truncated=truncated,
+                              terminated=terminated,
+                              infos=infos)
+        
+        # Parameter update
+        if timestep % buffer.buffer_size == 0:
+            if buffer.memory_index == 0:
+                t2_rollout = time.time()
 
-            agent.insert_data(
-                observations=obs,
-                states=states,
-                safety_states=safety_states,
-                actions=actions,
-                final_observations=final_obs,
-                final_states=final_states,
-                final_safety_states=final_safety_states,
-                terminated=terminated,
-                truncated=truncated
-            )
+                t1_update = time.time()
+                policy_loss, value_loss, entropy_loss, approx_kl, learning_rate = agent.update()
+                t2_update = time.time()
+            else:
+                raise RuntimeError("Discrepency appears between Buffer Logic and Rollout Policy.")
+            
+        # =============== Logging Phase ================
 
-            # ================== Learning Phase =====================
-            info = agent.update()
+        # Data setting for logging
+        if multi_agent:
+            logged_reward = rewards.view(-1, num_agent)
+            logged_reward = torch.mean(logged_reward, dim=-1).unsqueeze(-1) # Mean value of agent axis
+        else:
+            logged_reward = rewards
 
-            # =============== Logging Phase ================
-            if info is not None:
-                if not np.isfinite(info["critic_loss"]):
-                    print(f"The critic loss diverges at step {timestep}.")
-                    break
-                value_loss = info["critic_loss"]
-                tracking_data["Loss / critic"].append(value_loss)
+        if cumulative_rewards is None:
+            cumulative_rewards = torch.zeros_like(logged_reward, dtype=torch.float32)
+            cumulative_timesteps = torch.zeros_like(logged_reward, dtype=torch.int32)
+        
+        # Accumulates per-step rewards
+        cumulative_rewards.add_(logged_reward)
+        cumulative_timesteps.add_(1)
+        # Mean of per-step rewards (Mean value of env axis)
+        CLI_step_reward_means.append(torch.mean(logged_reward, dim=0).item())
 
-                if "actor_loss" in info:
-                    policy_loss = info["actor_loss"]
-                    flow_mean = info["flow_mean"]
-                    tracking_data["Loss / actor"].append(policy_loss)
-                    tracking_data["Policy / flow mean"].append(flow_mean)
+        done = (terminated | truncated).squeeze(-1)
+        finished_episodes = done.nonzero(as_tuple=False).squeeze(-1)
+        if finished_episodes.numel():
+            # Storage cumulative rewards and timesteps
+            track_rewards.extend(cumulative_rewards[finished_episodes][:, 0].reshape(-1).tolist())
+            track_timesteps.extend(cumulative_timesteps[finished_episodes][:, 0].reshape(-1).tolist())
+            CLI_track_rewards.extend(cumulative_rewards[finished_episodes][:, 0].detach().cpu().tolist())
+            CLI_track_timesteps.extend(cumulative_timesteps[finished_episodes][:, 0].detach().cpu().tolist())
+            # reset the cumulative rewards and timesteps
+            cumulative_rewards[finished_episodes] = 0
+            cumulative_timesteps[finished_episodes] = 0
+
+        # record data
+        tracking_data["Reward / Instantaneous reward (max)"].append(torch.max(logged_reward).item())
+        tracking_data["Reward / Instantaneous reward (min)"].append(torch.min(logged_reward).item())
+        tracking_data["Reward / Instantaneous reward (mean)"].append(torch.mean(logged_reward).item())
+
+        task_reward = next_infos.get("reward", None)
+        if task_reward is not None:
+            for k, v in task_reward.items():
+                # Mean value of env axis
+                tracking_data[k].append(torch.mean(v).item())
+
+        if len(track_rewards):
+            track_reward_np = np.array(track_rewards)
+            track_timestep_np = np.array(track_timesteps)
+
+            tracking_data["Reward / Total reward (max)"].append(np.max(track_reward_np))
+            tracking_data["Reward / Total reward (min)"].append(np.min(track_reward_np))
+            tracking_data["Reward / Total reward (mean)"].append(np.mean(track_reward_np))
+
+            tracking_data["Episode / Total timesteps (max)"].append(np.max(track_timestep_np))
+            tracking_data["Episode / Total timesteps (min)"].append(np.min(track_timestep_np))
+            tracking_data["Episode / Total timesteps (mean)"].append(np.mean(track_timestep_np))
+
+            # reset data containers for next iteration
+            track_rewards.clear()
+            track_timesteps.clear()
+        
+        # Tensorboard logging
+        if timestep % write_interval == 0: 
+            for k, v in tracking_data.items():
+                if k.endswith("(min)"):
+                    writer.add_scalar(k, np.min(v), timestep)
+                elif k.endswith("(max)"):
+                    writer.add_scalar(k, np.max(v), timestep)
                 else:
-                    policy_loss = None
-                    flow_mean = None
+                    writer.add_scalar(k, np.mean(v), timestep)
+            # reset data containers for next iteration
+            tracking_data.clear()
 
-            with torch.no_grad():
-                value = pred_agent.predict(safety_states)
-                next_value = pred_agent.predict(final_safety_states)
-                delta = next_value - value
-            tracking_data["Value / Delta_N"].append(delta.mean().item())
+        # CLI Logging about the training process at each parameter update
+        if timestep % CLI_logging_interval == 0:
+            CLI_logging_step += 1
+            per_step_reward = float(np.mean(CLI_step_reward_means)) if len(CLI_step_reward_means) else float("nan")
+            avg_ep_step = float(np.mean(CLI_track_timesteps)) if len(CLI_track_timesteps) else float("nan")
+            avg_ep_reward = float(np.mean(CLI_track_rewards)) if len(CLI_track_rewards) else float("nan")
 
-            if cumulative_timesteps is None:
-                cumulative_timesteps = torch.zeros((env.num_envs, 1), dtype=torch.int32)
-            cumulative_timesteps.add_(1)
+            ep_step = "-" if np.isnan(avg_ep_step) else f"{avg_ep_step:6.3f} steps"
+            per_r = "-" if np.isnan(per_step_reward) else f"{per_step_reward:6.3f}"
+            ep_r = "-" if np.isnan(avg_ep_reward) else f"{avg_ep_reward:6.3f}"
 
-            done = (terminated | truncated).squeeze(-1)
-            finished_episodes = done.nonzero(as_tuple=False).squeeze(-1).cpu()
-            if finished_episodes.numel():
-                tracking_timesteps.extend(cumulative_timesteps[finished_episodes][:, 0].reshape(-1).tolist())
-                CLI_track_timesteps.extend(cumulative_timesteps[finished_episodes][:, 0].detach().cpu().tolist())
-                cumulative_timesteps[finished_episodes] = 0
-            if len(tracking_timesteps):
-                tracking_timesteps_np = np.array(tracking_timesteps)
-                tracking_data["Episode / Total timesteps (mean)"].append(np.mean(tracking_timesteps_np))
-                tracking_timesteps.clear()
-                
-            # Tensorboard logging
-            if (timestep % write_interval == 0) and log_dir is not None: 
-                for k, v in tracking_data.items():
-                    if k.endswith("(min)"):
-                        writer.add_scalar(k, np.min(v), timestep)
-                    elif k.endswith("(max)"):
-                        writer.add_scalar(k, np.max(v), timestep)
-                    else:
-                        writer.add_scalar(k, np.mean(v), timestep)
-                # reset data containers for next iteration
-                tracking_data.clear()
+            elapsed_time += (t2_rollout + t2_update - t1_rollout - t1_update)
+            e_h = int(elapsed_time // 3600)
+            e_m = int((elapsed_time % 3600) // 60)
+            e_s = int(elapsed_time % 60)
+            total_rollout = int(cfg["train"]["timesteps"] // CLI_logging_interval)
+            complete_time = (t2_rollout + t2_update - t1_rollout - t1_update) * (total_rollout - CLI_logging_step)
+            c_h = int(complete_time // 3600)
+            c_m = int((complete_time % 3600) // 60)
+            c_s = int(complete_time % 60)
 
-            # CLI Logging about the training process at each parameter update
-            if timestep % CLI_interval == 0:
-                end_time = time.time()
-                avg_ep_step = float(np.mean(CLI_track_timesteps)) if len(CLI_track_timesteps) else float("nan")
+            content_width = 64
+            line_header = f"Step Progress {timestep} / {cfg['train']['timesteps']}"
+            line_time_header = f"Time Progress  {e_h:02d}:{e_m:02d}:{e_s:02d}/{c_h:02d}:{c_m:02d}:{c_s:02d}"
+            line_rollout_time = f"Rollout Time      : {t2_rollout - t1_rollout:6.3f} sec"
+            line_train_time = f"Training Time     : {t2_update - t1_update:6.3f} sec"
+            line_value_loss = f"Value Loss        : {value_loss:6.3f}"
+            line_policy_loss = f"Policy Loss       : {policy_loss:6.3f}"
+            line_entropy_loss = f"Entropy Loss      : {entropy_loss:6.3f}"
+            line_approx_kl = f"Approximate KL    : {approx_kl:6.3f}"
+            line_episode_step = f"Avg Episode Step  : {ep_step}"
+            line_per_step_reward = f"Per-Step Rewards  : {per_r}"
+            line_episode_reward = f"Epiode Rewards    : {ep_r}"
 
-                avg_ep_step_str = "-" if np.isnan(avg_ep_step) else f"{avg_ep_step:6.3f} steps"
-                value_loss_str = f"{value_loss:6.3f}"
-                policy_loss_str = "-" if policy_loss is None else f"{policy_loss:6.3f}"
-                flow_mean_str = "-" if flow_mean is None else f"{flow_mean:6.3f}"
+            print(f" ________________________________________________________________")
+            print(f"|                                                                |")
+            print(f"|{line_header.center(content_width)}|")
+            print(f"|{line_time_header.center(content_width)}|")
+            print(f"|________________________________________________________________|")
+            print(f"|                                                                |")
+            print(f"| {line_rollout_time:<{content_width-1}}|")
+            print(f"| {line_train_time:<{content_width-1}}|")
+            print(f"| {line_value_loss:<{content_width-1}}|")
+            print(f"| {line_policy_loss:<{content_width-1}}|")
+            print(f"| {line_entropy_loss:<{content_width-1}}|")
+            print(f"| {line_approx_kl:<{content_width-1}}|")
+            print(f"| {line_episode_step:<{content_width-1}}|")
+            print(f"| {line_per_step_reward:<{content_width-1}}|")
+            print(f"| {line_episode_reward:<{content_width-1}}|")
+            print(f"|________________________________________________________________|")
 
-                elapsed_time += (end_time - start_time)
-                e_h = int(elapsed_time // 3600)
-                e_m = int((elapsed_time % 3600) // 60)
-                e_s = int(elapsed_time % 60)
-                total_rollout = int(cfg["train"]["timesteps"] // CLI_interval)
-                complete_time = (end_time - start_time) * (total_rollout - logstep)
-                c_h = int(complete_time // 3600)
-                c_m = int((complete_time % 3600) // 60)
-                c_s = int(complete_time % 60)
+            # update rollout time
+            t1_rollout = time.time()
 
-                content_width = 64
-                line_header = f"Step Progress {timestep} / {cfg['train']['timesteps']}"
-                line_time_header = f"Time Progress  {e_h:02d}:{e_m:02d}:{e_s:02d}/{c_h:02d}:{c_m:02d}:{c_s:02d}"
-                line_rollout_time = f"Rollout Time      : {end_time - start_time:6.3f} sec"
-                line_value_loss = f"Value Loss        : {value_loss_str}"
-                line_policy_loss = f"Policy Loss       : {policy_loss_str}"
-                line_flow_mean = f"Flow Mean         : {flow_mean_str}"
-                line_episode_step = f"Avg Episode Step  : {avg_ep_step_str}"
+        # Checkpoint save
+        if timestep % checkpoint_interval == 0:
+            checkpoint_path = os.path.join(log_dir, f"agent_{timestep}.pt")
+            checkpoint_path_onnx = os.path.join(log_dir, f"agent_{timestep}.onnx") if not multi_agent else None
+            agent.save(checkpoint_path, path_onnx=checkpoint_path_onnx)
 
-                print(f" ________________________________________________________________")
-                print(f"|                                                                |")
-                print(f"|{line_header.center(content_width)}|")
-                print(f"|{line_time_header.center(content_width)}|")
-                print(f"|________________________________________________________________|")
-                print(f"|                                                                |")
-                print(f"| {line_rollout_time:<{content_width-1}}|")
-                print(f"| {line_value_loss:<{content_width-1}}|")
-                print(f"| {line_policy_loss:<{content_width-1}}|")
-                print(f"| {line_flow_mean:<{content_width-1}}|")
-                print(f"| {line_episode_step:<{content_width-1}}|")
-                print(f"|________________________________________________________________|")
+        # update
+        obs = next_obs
+        states = next_states
+        infos = next_infos
 
-                logstep += 1
-                start_time = end_time
+    # close the simulator
+    env.close()
 
-            # Checkpoint save
-            if (timestep % checkpoint_interval == 0) and log_dir is not None:
-                checkpoint_path = os.path.join(log_dir, f"agent_{timestep}.pt")
-                agent.save(checkpoint_path)
-
-            # update policy inputs
-            obs = next_obs
-            states = next_states
-            safety_states = next_safety_states
-            safety_values = next_safety_values
-            infos = next_infos
-
-    finally:
-        env.close()
 
 if __name__ == "__main__":
+    # run the main function
     main()
+    # close sim app
     simulation_app.close()

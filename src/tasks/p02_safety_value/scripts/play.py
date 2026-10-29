@@ -248,7 +248,7 @@ def main() -> None:
     print(f"[INFO] Log directory: {log_dir}")
 
     # ============================= Online Rollout ============================= #
-    obs, states, safety_states, infos = env.reset()
+    obs, _, _, _, infos = env.reset()
 
     timestep = 0
     start_time = time.time()
