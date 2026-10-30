@@ -15,7 +15,7 @@ parser.add_argument("--num_envs", type=int, default=4096, help="Number of enviro
 parser.add_argument("--task", type=str, default="R1-safe", help="Name of the task.")
 parser.add_argument("--checkpoint", type=str, default=None, help="Path to model checkpoint.")
 parser.add_argument("--predictor_checkpoint", type=str, default=None, help="Path to safety value network checkpoint.")
-parser.add_argument("--initial_dataset", type=str, default="logs/r1_loco/2026-10-29_17-29-17_mappo/Predictor/2026-10-29_22-54-23/2026-10-29_23-01-25/collected/risk_init_dataset.pt", help="Path to Risk Initial dataset.")
+parser.add_argument("--initial_dataset", type=str, default=None, help="Path to Risk Initial dataset.")
 
 parser.add_argument("--algorithm",
                     type=str,
@@ -84,7 +84,7 @@ def main():
     if args_cli.predictor_checkpoint is not None:
         predictor_checkpoint = os.path.abspath(args_cli.predictor_checkpoint)
         log_dir = os.path.join(os.path.dirname(predictor_checkpoint), "safe_policy")
-        log_dir += datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + f"{algorithm}"
+        log_dir = os.path.join(log_dir, datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + f"_{algorithm}")
         os.makedirs(log_dir, exist_ok=True)
     else:
         log_dir = None
@@ -255,7 +255,7 @@ def main():
     t2_update = 0
 
     # Reset environment
-    obs, states, safety_states, _, infos = env.reset()
+    obs, states, safety_states, safety_values, infos = env.reset()
     timestep = 0
     elapsed_time = 0
     CLI_logging_step = 0
@@ -287,12 +287,19 @@ def main():
             ) = env.step(actions)
             # safety value-based reward
             next_pred_safety_value = pred_agent.predict(final_safety_states)
-            delta_safety_reward = env._unwrapped.cfg.r_delta_safety * (current_pred_safety_value - next_pred_safety_value).clamp(min=-1, max=1)
-            # Add value-based reward
+            delta_safety_reward =  (current_pred_safety_value - next_pred_safety_value).clamp(min=-1, max=1)
+            pred_error_penalty = -torch.abs(next_pred_safety_value - final_safety_values)
+            # add safety value-based reward
             if multi_agent:
-                rewards = (rewards.reshape(-1, num_agent) + delta_safety_reward).reshape(-1, 1)
+                rewards = (rewards.reshape(-1, num_agent) 
+                           + env._unwrapped.cfg.r_delta_safety * delta_safety_reward
+                           + env._unwrapped.cfg.p_pred_error * pred_error_penalty).reshape(-1, 1)
             else:
-                rewards += delta_safety_reward
+                rewards += (env._unwrapped.cfg.r_delta_safety * delta_safety_reward
+                            + env._unwrapped.cfg.p_pred_error * pred_error_penalty)
+            # add safety reward information to dict for tensorboard logging
+            next_infos["reward"]["Task Reward / Common_Delta_Safety_Reward"] = delta_safety_reward
+            next_infos["reward"]["Task Penalty / Common_Prediction_Error"] = pred_error_penalty
             
             # update rollout number
             timestep += 1
@@ -453,6 +460,8 @@ def main():
         # update
         obs = next_obs
         states = next_states
+        safety_states = next_safety_states
+        safety_values = next_safety_values
         infos = next_infos
 
     # close the simulator

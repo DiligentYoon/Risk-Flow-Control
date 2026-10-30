@@ -15,7 +15,7 @@ from tasks.p03_1_safe_policy.envs.mdp.randomizer import reset_state_from_dataset
 @configclass
 class R1SafeEnvCfg(R1BaseEnvCfg):
     ## ==================== Environment parameters ==================== ##
-    episode_length_s = 12.0
+    episode_length_s = 5.0
     sim_dt = 0.005
     decimation = 4
 
@@ -30,7 +30,7 @@ class R1SafeEnvCfg(R1BaseEnvCfg):
 
     ## ========== Single Agent Setting ========== ##
     # action_space = 24
-    # observation_space = 86
+    # observation_space = 81
     # num_agents = 1
     # action_scale_factor = 0.5
 
@@ -46,18 +46,20 @@ class R1SafeEnvCfg(R1BaseEnvCfg):
     
     # ==== Reward ===== #
     r_success: float = 200
-    r_delta_safety: float = 10
+    r_delta_safety: float = 5.0
     
+    p_pred_error: float = 5.0
+    p_lin_vel: float = 0.1
     p_ang_vel_xy: float = 0.2
     p_limits: float = 10.0
     p_deviation_swing: float = 0.0
-    p_joint_torque: float = 1.0e-7
-    p_joint_torque_limit: float = 1.0e-5
-    p_joint_vel: float = 1.0e-4
-    p_joint_acc: float = 1.0e-8
+    p_joint_torque: float = 1.0e-6
+    p_joint_torque_limit: float = 1.0e-4
+    p_joint_vel: float = 1.0e-3
+    p_joint_acc: float = 1.0e-7
     p_deviation_hip: float = 1.0
     p_deviation_arm: float = 1.0
-    p_action_rate: float = 5.0e-3
+    p_action_rate: float = 5.0e-2
     p_fail: float = 200
 
 
@@ -72,6 +74,7 @@ class R1SafeEnvCfg(R1BaseEnvCfg):
     def __post_init__(self):
         super().__post_init__()
         self.events.push_robot = None
+        self.events.reset_robot_joints = None
         self.events.reset_base = EventTerm(
             func=reset_state_from_dataset,
             mode="reset",
