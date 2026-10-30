@@ -14,8 +14,8 @@ parser.add_argument("--disable_fabric", type=bool, default=False, help="Disable 
 parser.add_argument("--num_envs", type=int, default=4096, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default="R1-safe", help="Name of the task.")
 parser.add_argument("--checkpoint", type=str, default=None, help="Path to model checkpoint.")
-parser.add_argument("--predictor_checkpoint", type=str, default=None, help="Path to safety value network checkpoint.")
-parser.add_argument("--initial_dataset", type=str, default=None, help="Path to Risk Initial dataset.")
+parser.add_argument("--predictor_checkpoint", type=str, default="logs/r1_loco/2026-10-29_17-29-17_mappo/Predictor/2026-10-29_22-54-23/2026-10-29_23-01-25/agent_10000.pt", help="Path to safety value network checkpoint.")
+parser.add_argument("--initial_dataset", type=str, default="logs/r1_loco/2026-10-29_17-29-17_mappo/Predictor/2026-10-29_22-54-23/2026-10-29_23-01-25/collected/risk_init_dataset.pt", help="Path to Risk Initial dataset.")
 
 parser.add_argument("--algorithm",
                     type=str,
@@ -261,8 +261,8 @@ def main():
     CLI_logging_step = 0
     CLI_logging_interval = min(512, max(256, buffer.buffer_size))
     
-    current_pred_safety_value = pred_agent.predict(safety_states)
-    next_pred_safety_value    = torch.zeros_like(current_pred_safety_value, dtype=torch.float32, device=env.device)
+    anchor_safety_value = pred_agent.predict(safety_states)
+    next_pred_safety_value    = torch.zeros_like(anchor_safety_value, dtype=torch.float32, device=env.device)
     
     # Simulate environment
     while simulation_app.is_running() and timestep <= cfg["train"]["timesteps"]:
@@ -287,7 +287,7 @@ def main():
             ) = env.step(actions)
             # safety value-based reward
             next_pred_safety_value = pred_agent.predict(final_safety_states)
-            delta_safety_reward =  (current_pred_safety_value - next_pred_safety_value).clamp(min=-1, max=1)
+            delta_safety_reward =  (anchor_safety_value - next_pred_safety_value).clamp(min=-1, max=1)
             pred_error_penalty = -torch.abs(next_pred_safety_value - final_safety_values)
             # add safety value-based reward
             if multi_agent:
@@ -463,6 +463,11 @@ def main():
         safety_states = next_safety_states
         safety_values = next_safety_values
         infos = next_infos
+        
+        # update anchor value
+        if finished_episodes.numel():
+            anchor_safety_value[finished_episodes] = pred_agent.predict(next_safety_states[finished_episodes])
+            
 
     # close the simulator
     env.close()

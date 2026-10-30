@@ -246,8 +246,8 @@ def main():
     write_interval = env._unwrapped.max_episode_length
     timestep = 0
 
-    current_pred_safety_value = pred_agent.predict(safety_states)
-    next_pred_safety_value    = torch.zeros_like(current_pred_safety_value, dtype=torch.float32, device=env.device)
+    anchor_safety_value = pred_agent.predict(safety_states)
+    next_pred_safety_value    = torch.zeros_like(anchor_safety_value, dtype=torch.float32, device=env.device)
 
     # simulate environment
     while simulation_app.is_running():
@@ -271,7 +271,7 @@ def main():
             ) = env.step(actions)
             # safety value-based reward
             next_pred_safety_value = pred_agent.predict(final_safety_states)
-            delta_safety_reward = (current_pred_safety_value - next_pred_safety_value).clamp(min=-1, max=1)
+            delta_safety_reward =  (anchor_safety_value - next_pred_safety_value).clamp(min=-1, max=1)
             pred_error_penalty = -torch.abs(next_pred_safety_value - final_safety_values)
             # add safety value-based reward
             if multi_agent:
@@ -391,7 +391,13 @@ def main():
         # state update
         obs = next_obs
         states = next_states
+        safety_states = next_safety_states
+        safety_values = next_safety_values
         infos = next_infos
+    
+        # update anchor value
+        if finished_episodes.numel():
+            anchor_safety_value[finished_episodes] = pred_agent.predict(next_safety_states[finished_episodes])
 
 
     # close the simulator

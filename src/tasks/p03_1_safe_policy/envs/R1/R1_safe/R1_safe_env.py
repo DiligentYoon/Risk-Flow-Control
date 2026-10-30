@@ -170,7 +170,7 @@ class R1SafeEnv(R1BaseEnv):
         fail_penalty   = -self.fail.float()
         
         ang_vel_xy_penalty = -torch.sum(torch.square(self.root_ang_vel_b[:, :2]), dim=1)
-        lin_vel_penalty = -torch.sum(torch.square(self.root_lin_vel_b[:, 2]), dim=1)
+        lin_vel_penalty = -torch.sum(torch.square(self.root_lin_vel_b), dim=1)
 
         joint_deviation_penalty_hip_xz = -torch.sum(torch.abs(self.joint_deviations[:, self.hip_xz_joint_ids]), dim=-1)
         joint_deviation_penalty_arm = -torch.sum(torch.abs(self.joint_deviations[:, self.deviation_arm_joint_ids]), dim=1)
@@ -200,7 +200,7 @@ class R1SafeEnv(R1BaseEnv):
 
         common_rewards = (
             self.cfg.p_ang_vel_xy * ang_vel_xy_penalty
-            # + self.cfg.p_lin_vel * lin_vel_penalty
+            + self.cfg.p_lin_vel * lin_vel_penalty
             + self.cfg.r_success * success_reward
             + self.cfg.p_fail * fail_penalty
         )
@@ -237,7 +237,7 @@ class R1SafeEnv(R1BaseEnv):
 
         self.extras["reward"] = {
             "Task Penalty / Common_Ang_Vel_XY": ang_vel_xy_penalty,
-            # "Task Penalty / Common_Lin_Vel": lin_vel_penalty,
+            "Task Penalty / Common_Lin_Vel": lin_vel_penalty,
             "Task Penalty / Arm_Deviation": joint_deviation_penalty_arm,
             "Task Penalty / Arm_Swing_Deviation": joint_deviation_penalty_swing,
             "Task Penalty / Arm_Joint_Limit": joint_limit_penalty_arm,
