@@ -270,6 +270,7 @@ def main():
                 next_infos,
             ) = env.step(actions)
             # safety value-based reward
+            current_pred_safety_value = pred_agent.predict(safety_states)
             next_pred_safety_value = pred_agent.predict(final_safety_states)
             delta_safety_reward =  (anchor_safety_value - next_pred_safety_value).clamp(min=-1, max=1)
             pred_error_penalty = -torch.abs(next_pred_safety_value - final_safety_values)
@@ -377,11 +378,11 @@ def main():
         # Plot Phase
         if plot is not None:
             # Add Safety value for plotting
-            infos["viz_data"]["real_risk_value"] = final_safety_values
-            infos["viz_data"]["pred_risk_value"] = next_pred_safety_value
-            infos["viz_data"]["prediction_error"] = pred_error_penalty
-            done = terminated[0] | truncated[0]
-            plot.append(viz_data=infos["viz_data"], episode_end=done)
+            infos["viz_data"]["real_risk_value"] = safety_values
+            infos["viz_data"]["pred_risk_value"] = current_pred_safety_value
+            infos["viz_data"]["prediction_error"] = torch.abs(current_pred_safety_value - safety_values)
+            done_env0 = terminated[0] | truncated[0]
+            plot.append(viz_data=infos["viz_data"], episode_end=done_env0)
 
         # Video update
         if timestep == args_cli.video_length:
