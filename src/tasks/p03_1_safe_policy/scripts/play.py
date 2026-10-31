@@ -235,7 +235,9 @@ def main():
         plot: GIFSavePlotter = plotter_cls(env, plot_cfg, plot_dir)
     else:
         plot = None
-        
+
+    num_finished = 0
+    num_terminated = 0
     tracking_data = collections.defaultdict(list)
     track_cumulative_rewards   = collections.deque(maxlen=500)
     track_cumulative_timesteps = collections.deque(maxlen=500)
@@ -320,6 +322,9 @@ def main():
             cumulative_rewards[finished_episodes] = 0
             cumulative_timesteps[finished_episodes] = 0
 
+            num_terminated += (terminated.squeeze(-1).nonzero(as_tuple=False).squeeze(-1)).numel()
+            num_finished += finished_episodes.numel()
+
         # Record cumulative data
         if len(track_cumulative_rewards):
             track_reward_np = np.array(track_cumulative_rewards)
@@ -400,6 +405,17 @@ def main():
         if finished_episodes.numel():
             anchor_safety_value[finished_episodes] = pred_agent.predict(next_safety_states[finished_episodes])
 
+
+    line_header = f"Final Metrics of {args_cli.task} Task"
+    print(f" {'_' * content_width}")
+    print(f"|{' ' * content_width}|")
+    print(f"|{line_header.center(content_width)}|")
+    print(f"|{'_' * content_width}|")
+    print(f"|{' ' * content_width}|")
+    
+    print(f"| {'Success Rate':<50}: {100*(1- num_terminated / num_finished):<36.3f} |")
+
+    print(f"|{'_' * content_width}|")
 
     # close the simulator
     env.close()
