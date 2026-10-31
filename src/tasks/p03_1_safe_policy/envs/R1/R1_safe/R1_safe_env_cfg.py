@@ -58,9 +58,9 @@ class R1SafeEnvCfg(R1BaseEnvCfg):
     p_action_rate: float = 5.0e-2
     p_limits: float = 10.0
     
-    p_joint_torque: float = 1.0e-7
+    p_joint_torque: float = 1.0e-6
     p_joint_torque_limit: float = 1.0e-4
-    p_joint_vel: float = 1.0e-3
+    p_joint_vel: float = 1.0e-5
     p_joint_acc: float = 1.0e-7
     p_fail: float = 200
 
