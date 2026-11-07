@@ -8,6 +8,7 @@ models:
     max_log_std: 2.0
   value: 
     clip_actions: False
+  ra_value:
     M: 1.0
 
   model_type: null

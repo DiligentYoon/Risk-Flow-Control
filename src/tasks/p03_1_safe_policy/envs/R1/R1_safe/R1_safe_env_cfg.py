@@ -20,19 +20,20 @@ class R1SafeEnvCfg(R1BaseEnvCfg):
     decimation = 4
 
     ## ========== Multi Agent Setting =========== ##
-    possible_agents = ["arm", "leg"]
-    action_space = {"arm": 12, "leg": 12}
-    observation_space = {"arm": 45, "leg": 45}
-    state_space = {"arm": 82, "leg": 82}
-    num_agents = 2
-    action_scale_factor = {"arm": [0.5, ()],
-                           "leg": [0.5, ()]}
+    # possible_agents = ["arm", "leg"]
+    # action_space = {"arm": 12, "leg": 12}
+    # observation_space = {"arm": 45, "leg": 45}
+    # state_space = {"arm": 82, "leg": 82}
+    # num_agents = 2
+    # action_scale_factor = {"arm": [0.5, ()],
+    #                        "leg": [0.5, ()]}
 
     ## ========== Single Agent Setting ========== ##
-    # action_space = 24
-    # observation_space = 81
-    # num_agents = 1
-    # action_scale_factor = 0.5
+    action_space = 24
+    observation_space = 81
+    state_space = 82
+    num_agents = 1
+    action_scale_factor = 0.5
 
     # ===== Gait guidance ===== #
     time_period = 0.45
@@ -108,4 +109,5 @@ class R1SafePlayEnvCfg(R1SafeEnvCfg):
         self.plotter: PNGSavePlotter = PNGSavePlotter
         self.viz_data = {"real_risk_value": 0,
                          "pred_risk_value": 0,
+                         "reach_avoid_value": 0,
                          "prediction_error": 0}

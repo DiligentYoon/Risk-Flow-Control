@@ -112,26 +112,26 @@ class R1SafeEnv(R1BaseEnv):
         return observations
 
     def _get_states(self) -> dict[str, torch.Tensor]:
+        total_joint_ids = self.total_leg_joint_ids + self.total_arm_joint_ids
+
+        shared_states = torch.cat([
+            self._robot.data.root_pos_w[:, 2:3],
+            self._robot.data.root_lin_vel_b,
+            self._robot.data.root_ang_vel_b,
+            self._robot.data.projected_gravity_b,
+            self._robot.data.joint_pos[:, total_joint_ids],
+            self._robot.data.joint_vel[:, total_joint_ids],
+            self.prev_actions[:, self.total_leg_joint_ids],
+            self.prev_actions[:, self.total_arm_joint_ids],
+        ], dim=-1)
+
         if self.cfg.num_agents > 1:
-            total_joint_ids = self.total_leg_joint_ids + self.total_arm_joint_ids
-
-            shared_states = torch.cat([
-                self._robot.data.root_pos_w[:, 2:3],
-                self._robot.data.root_lin_vel_b,
-                self._robot.data.root_ang_vel_b,
-                self._robot.data.projected_gravity_b,
-                self._robot.data.joint_pos[:, total_joint_ids],
-                self._robot.data.joint_vel[:, total_joint_ids],
-                self.prev_actions["leg"],
-                self.prev_actions["arm"],
-            ], dim=-1)
-
             states = {
                 "arm": shared_states,
                 "leg": shared_states,
             }
         else:
-            states = None
+            states = shared_states
 
         return states
 

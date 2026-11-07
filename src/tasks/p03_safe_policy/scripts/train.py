@@ -227,7 +227,7 @@ def main():
             next_infos["reward"]["Task Penalty / Common_Prediction_Error"] = pred_error_penalty
 
             # reach-avoid value
-            M = cfg["models"]["value"]["M"]
+            M = cfg["models"]["ra_value"]["M"]
             g_values = torch.where(terminated, M, -M) # failure set
             l_values = torch.where(next_pred_safety_value < 0, -M, M) # target set
 
@@ -256,7 +256,7 @@ def main():
                 t2_rollout = time.time()
 
                 t1_update = time.time()
-                policy_loss, value_loss, entropy_loss, approx_kl, learning_rate = agent.update()
+                policy_loss, value_loss, ra_loss, entropy_loss, approx_kl, learning_rate = agent.update()
                 t2_update = time.time()
             else:
                 raise RuntimeError("Discrepency appears between Buffer Logic and Rollout Policy.")
@@ -296,6 +296,11 @@ def main():
         tracking_data["Reward / Instantaneous reward (max)"].append(torch.max(logged_reward).item())
         tracking_data["Reward / Instantaneous reward (min)"].append(torch.min(logged_reward).item())
         tracking_data["Reward / Instantaneous reward (mean)"].append(torch.mean(logged_reward).item())
+
+        if timestep % buffer.buffer_size == 0:
+            tracking_data["Loss / Policy Loss"].append(policy_loss)
+            tracking_data["Loss / Value Loss"].append(value_loss)
+            tracking_data["Loss / RA Value Loss"].append(ra_loss)
 
         task_reward = next_infos.get("reward", None)
         if task_reward is not None:
@@ -358,6 +363,7 @@ def main():
             line_rollout_time = f"Rollout Time      : {t2_rollout - t1_rollout:6.3f} sec"
             line_train_time = f"Training Time     : {t2_update - t1_update:6.3f} sec"
             line_value_loss = f"Value Loss        : {value_loss:6.3f}"
+            line_ra_loss = f"RA Loss           : {ra_loss:6.3f}"   
             line_policy_loss = f"Policy Loss       : {policy_loss:6.3f}"
             line_entropy_loss = f"Entropy Loss      : {entropy_loss:6.3f}"
             line_approx_kl = f"Approximate KL    : {approx_kl:6.3f}"
@@ -374,6 +380,7 @@ def main():
             print(f"| {line_rollout_time:<{content_width-1}}|")
             print(f"| {line_train_time:<{content_width-1}}|")
             print(f"| {line_value_loss:<{content_width-1}}|")
+            print(f"| {line_ra_loss:<{content_width-1}}|")
             print(f"| {line_policy_loss:<{content_width-1}}|")
             print(f"| {line_entropy_loss:<{content_width-1}}|")
             print(f"| {line_approx_kl:<{content_width-1}}|")

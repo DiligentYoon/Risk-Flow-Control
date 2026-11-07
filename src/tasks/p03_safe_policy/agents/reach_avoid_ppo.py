@@ -61,6 +61,7 @@ class ReachAvoidPPO(Agent):
                 self.learning_rate_scheduler = KLAdaptiveLR(self.optimizer, self.kl_threshold)
 
         # checkpoints
+        self.checkpoint_modules["actor"] = self.actor
         self.checkpoint_modules["value_critic"] = self.value_critic
         self.checkpoint_modules["value_standardizer"] = self.value_standardizer
         self.checkpoint_modules["ra_critic"] = self.ra_critic
@@ -82,6 +83,15 @@ class ReachAvoidPPO(Agent):
                                           "value_returns", "value_advantages"]
         
         self.set_running_mode("eval")
+
+    def act(self, observations: torch.Tensor, infos: dict[str, torch.Tensor], timestep: int, deterministic: bool = False, update_rms: bool = False) -> torch.Tensor:
+        # Normal act
+        raw_actions, log_prob, entropy = self.actor(observations=observations,
+                                                    taken_actions=None,
+                                                    deterministic=deterministic,
+                                                    update_rms=update_rms)
+
+        return raw_actions, log_prob, entropy                       # Add raw action which is inserted into buffer
 
     @torch.no_grad()
     def _compute_ra_target(self, next_states: torch.Tensor, g_values: torch.Tensor, l_values: torch.Tensor) -> torch.Tensor:

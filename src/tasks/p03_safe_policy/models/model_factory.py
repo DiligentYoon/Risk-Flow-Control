@@ -80,7 +80,7 @@ class ReachAvoidModelFactory:
                                     num_actions=self.action_size,
                                     min_log_std=self.model_cfg["policy"]["min_log_std"],
                                     max_log_std=self.model_cfg["policy"]["max_log_std"],
-                                    squash=self.model_cfg["squash"],
+                                    squash=self.model_cfg["squashed"],
                                     device=self.device)
             value_critic = ValueCritic(num_states=self.state_size,
                                        device=self.device)
