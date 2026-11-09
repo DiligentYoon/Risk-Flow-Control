@@ -74,13 +74,15 @@ class ReachAvoidPPO(Agent):
                               "actions", "action_log_probs",
                               "value_preds", "rewards",
                               "g_values", "l_values", 
-                              "value_returns", "value_advantages",
+                              "value_returns", "ra_returns", 
+                              "value_advantages", "ra_advantages",
                               "terminated", "truncated"]
 
         self.tensors_names_for_updates = ["observations", "states", "next_states",
                                           "actions", "action_log_probs",
                                           "g_values", "l_values",
-                                          "value_returns", "value_advantages"]
+                                          "value_returns", "ra_returns", 
+                                          "value_advantages", "ra_advantages",]
         
         self.set_running_mode("eval")
 
@@ -119,7 +121,9 @@ class ReachAvoidPPO(Agent):
 
         with torch.no_grad():
             value_preds, _, _ = self.value_critic(states)
+            ra_preds, _, _ = self.ra_critic(states)
             value_preds = self.value_standardizer.destandardize(value_preds)
+            ra_preds = self.ra_standardizer.destandardize(ra_preds)
 
         # time-limit (truncation) bootstrapping
         if self.time_limit_bootstrap:
@@ -136,23 +140,32 @@ class ReachAvoidPPO(Agent):
                                 truncated=truncated,
                                 terminated=terminated,
                                 action_log_probs=action_log_probs,
-                                value_preds=value_preds)
+                                value_preds=value_preds,
+                                ra_preds=ra_preds)
 
     def update(self) -> torch.Tensor:
         with torch.no_grad():
-            value_critic_input = self.buffer.get_tensor_by_name("next_states")[-1]
-            last_values, _, _ = self.value_critic(value_critic_input)
+            critic_input = self.buffer.get_tensor_by_name("next_states")[-1]
+            last_values, _, _ = self.value_critic(critic_input)
+            last_ra, _, _ = self.ra_critic(critic_input)
             last_values = self.value_standardizer.destandardize(last_values)
+            last_ra = self.ra_standardizer.destandardize(last_ra)
         
         # GAE calculation (value critic)
         self.buffer.compute_value_gae(last_values, self.value_discount_factor, self.gae_lambda)
-        # value standardization
+        # standardization
         value_preds = self.value_standardizer.standardize(self.buffer.get_tensor_by_name("value_preds").reshape(-1, 1), update=True)
         returns = self.value_standardizer.standardize(self.buffer.get_tensor_by_name("value_returns").reshape(-1, 1), update=True)
         self.buffer.set_tensor_by_name("value_preds", value_preds.reshape(self.buffer.buffer_size, -1, 1))
         self.buffer.set_tensor_by_name("value_returns", returns.reshape(self.buffer.buffer_size, -1, 1))
 
-        # GAE calculation (reach-avoid critic)
+        # GAE calculation (ra critic)
+        self.buffer.compute_ra_gae(last_ra, self.ra_discount_factor, self.gae_lambda)
+        # standardization
+        ra_preds = self.ra_standardizer.standardize(self.buffer.get_tensor_by_name("ra_preds").reshape(-1, 1), update=True)
+        ra_returns = self.ra_standardizer.standardize(self.buffer.get_tensor_by_name("ra_returns").reshape(-1, 1), update=True)
+        self.buffer.set_tensor_by_name("ra_preds", ra_preds.reshape(self.buffer.buffer_size, -1, 1))
+        self.buffer.set_tensor_by_name("ra_returns", ra_returns.reshape(self.buffer.buffer_size, -1, 1))
         
         # Loss initialization
         cumulative_policy_loss = 0
@@ -178,7 +191,9 @@ class ReachAvoidPPO(Agent):
                     sampled_g,
                     sampled_l,
                     sampled_value_returns,
+                    sampled_ra_returns,
                     sampled_value_advantages,
+                    sampled_ra_advantages,
                 ) = batch
 
                 _, new_log_probs, dist_entropy = self.actor(observations=sampled_observations, 
@@ -197,28 +212,37 @@ class ReachAvoidPPO(Agent):
                     kl_divergence = ((torch.exp(ratio) - 1) - ratio).mean()
                     kl_divergences.append(kl_divergence)
                 
-                # Compute entropy loss
+                # entropy loss
                 if self.entropy_loss_scale:
                     entropy_loss = -self.entropy_loss_scale * dist_entropy
                 else:
                     entropy_loss = 0
 
-                # Compute policy loss
+                # policy loss (reward-driven)
                 ratio = torch.exp(new_log_probs - sampled_action_log_probs)
                 surrogate = sampled_value_advantages * ratio
                 surrogate_clipped = sampled_value_advantages * torch.clip(ratio, 
                                                                           1.0 - self.ratio_clip, 
                                                                           1.0 + self.ratio_clip)
-                policy_loss = -torch.min(surrogate, surrogate_clipped).mean()
+                reward_policy_loss = -torch.min(surrogate, surrogate_clipped).mean()
+
+                # policy loss (ra-driven)
+                ra_surrogate = sampled_ra_advantages * ratio
+                ra_surrogate_clipped = sampled_ra_advantages * torch.clip(ratio, 
+                                                                          1.0 - self.ratio_clip,
+                                                                          1.0 + self.ratio_clip)
+                ra_policy_loss = -torch.min(ra_surrogate, ra_surrogate_clipped).mean()
+
+                policy_loss = self.value_loss_scale * reward_policy_loss + self.ra_loss_scale * ra_policy_loss
 
                 # reach-avoid critic loss
                 continuation, _, _ = self.ra_critic(sampled_states, update_rms=not epoch)
                 targets = self._compute_ra_target(sampled_next_states, sampled_g, sampled_l)
-                ra_loss = self.ra_loss_scale * F.mse_loss(continuation, targets)
+                ra_loss = F.mse_loss(continuation, targets)
 
                 # value critic loss
                 predicted_values, _, _ = self.value_critic(sampled_states, update_rms=not epoch)
-                value_loss = self.value_loss_scale * F.mse_loss(sampled_value_returns, predicted_values)
+                value_loss = F.mse_loss(sampled_value_returns, predicted_values)
 
                 # Optimization step
                 self.optimizer.zero_grad()

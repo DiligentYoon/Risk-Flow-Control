@@ -20,6 +20,10 @@ class ReachAvoidBuffer(Buffer):
         # GAE Buffer
         self.create_tensor("value_returns", 1, dtype=torch.float32)
         self.create_tensor("value_advantages", 1, dtype=torch.float32)
+        self.create_tensor("ra_preds", 1, dtype=torch.float32)
+        self.create_tensor("ra_returns", 1, dtype=torch.float32)
+        self.create_tensor("ra_advantages", 1, dtype=torch.float32)
+        self.create_tensor("value_advantages", 1, dtype=torch.float32)
         self.create_tensor("g_values", 1, dtype=torch.float32)
         self.create_tensor("l_values", 1, dtype=torch.float32)
 
@@ -64,6 +68,37 @@ class ReachAvoidBuffer(Buffer):
         
         self.set_tensor_by_name('value_returns', return_tensor)
         self.set_tensor_by_name('value_advantages', advantage_tensor)
+
+
+    def compute_ra_gae(self, next_ra_value: torch.Tensor, gamma: float, lamb: float):
+        """Compute Generalized Advantage Expectation (GAE) with perspective of Reach-Avoid"""
+        return_tensor = torch.zeros_like(self.tensors['ra_returns'], dtype=torch.float32, device=self.device)
+        advantage_tensor = torch.zeros_like(self.tensors['ra_advantages'], dtype=torch.float32, device=self.device)
+        rollout = self.buffer_size
+
+        ra_preds = self.tensors["ra_preds"] # [T, E, 1]
+        g_values = self.tensors["g_values"]
+        l_values = self.tensors["l_values"]
+        # mask = torch.logical_not(torch.logical_or(self.tensors["terminated"], self.tensors["truncated"])).float() # [T, E, 1]
+
+        gae = torch.zeros((self.num_envs, 1), dtype=torch.float32, device=self.device)
+        for step in reversed(range(rollout)):
+            if step == (rollout-1):
+                next_ra_pred = next_ra_value
+            else:
+                next_ra_pred = ra_preds[step + 1]
+
+            # Predicted value : Syncronization
+            delta = ra_preds[step] - (gamma * torch.maximum(g_values[step], torch.minimum(l_values[step], next_ra_pred)))
+            gae = delta # one-step advantage
+
+            advantage_tensor[step] = gae
+            return_tensor[step] = ra_preds[step] - gae
+            
+        advantage_tensor = (advantage_tensor - advantage_tensor.mean()) / (advantage_tensor.std() + 1e-8)
+        
+        self.set_tensor_by_name('ra_returns', return_tensor)
+        self.set_tensor_by_name('ra_advantages', advantage_tensor)
         
 
 
