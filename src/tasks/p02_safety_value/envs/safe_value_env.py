@@ -84,7 +84,7 @@ class SafeValueEnv(Env):
 
     def step(
         self, action: Union[torch.Tensor, Dict[str, torch.Tensor]]
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, dict]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, dict]:
         """Execute one time-step and additionally return the safety-network input.
 
         Mirrors :meth:`Env.step`, with the pre-reset capture inserted between ``_get_rewards`` and
@@ -141,7 +141,7 @@ class SafeValueEnv(Env):
         self.reward_buf = self._get_rewards()
 
         # capture the state that actually followed the action, before the same-step reset overwrites it for the terminated environments
-        final_safety_state_buf, final_safety_value_buf, final_push_event_buf = self._capture_final_states()
+        final_states, final_safety_state_buf, final_safety_value_buf, final_push_event_buf = self._capture_final_states()
 
         # -- reset envs that terminated/timed-out and log the episode information
         reset_env_ids = self.reset_buf.nonzero(as_tuple=False).squeeze(-1)
@@ -180,6 +180,7 @@ class SafeValueEnv(Env):
             self.state_buf,
             self.safety_state_buf,
             self.safety_value_buf,
+            final_states,
             final_safety_state_buf,
             final_safety_value_buf,
             self.reward_buf,
@@ -230,13 +231,14 @@ class SafeValueEnv(Env):
         self.single_observation_space["safety"] = spec_to_gym_space(self.cfg.safety_state_space)
         self.safety_state_space = gym.vector.utils.batch_space(self.single_observation_space["safety"], self.num_envs)
 
-    def _capture_final_states(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def _capture_final_states(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Snapshot the true next state before the same-step autoreset discards it.
 
         Called once per step, after the termination flags and rewards have been computed and before
         any environment is reset. At this point the simulator and the cached intermediate values
         still describe the state reached by the last action, for every environment.
         """
+        final_states = self._get_states()
         final_safety_state_buf = self._get_safety_states()
         final_safety_value_buf = self._get_safety_values()
         final_push_event_buf   = self.push_event_buf.clone()
@@ -244,7 +246,7 @@ class SafeValueEnv(Env):
         # reset push event buf
         self.push_event_buf.zero_()
 
-        return final_safety_state_buf, final_safety_value_buf, final_push_event_buf
+        return final_states, final_safety_state_buf, final_safety_value_buf, final_push_event_buf
 
     def _apply_action_noise(self, action: torch.Tensor) -> torch.Tensor:
         """Apply the configured noise model to the actions."""

@@ -31,6 +31,7 @@ class SafetyEnvWrapper(IsaacLabWrapper):
 
         self._safety_states = None
         self._final_safety_states = None
+        self._final_states = None
 
     @property
     def safety_state_space(self) -> Union[gymnasium.Space, None]:
@@ -46,16 +47,18 @@ class SafetyEnvWrapper(IsaacLabWrapper):
 
     def step(
         self, actions: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, Any]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, Any]:
         """Perform a step in the environment."""
         actions = unflatten_tensorized_space(self.action_space, actions)
         (observations, states,
-         safety_states, safety_values, final_safety_states, final_safety_values, 
+         safety_states, safety_values, 
+         final_states, final_safety_states, final_safety_values, 
          reward, terminated, truncated, final_push_event, self._info) = self._env.step(actions)
 
         self._observations = flatten_tensorized_space(tensorize_space(self.observation_space, observations))
         if states is not None:
             self._states = flatten_tensorized_space(tensorize_space(self.state_space, states))
+            self._final_states = flatten_tensorized_space(tensorize_space(self.state_space, final_states))
         self._safety_states = flatten_tensorized_space(tensorize_space(self.safety_state_space, safety_states))
         self._final_safety_states = flatten_tensorized_space(tensorize_space(self.safety_state_space, final_safety_states))
 
@@ -64,6 +67,7 @@ class SafetyEnvWrapper(IsaacLabWrapper):
             self._states,
             self._safety_states,
             safety_values.reshape(-1, 1),
+            self._final_states,
             self._final_safety_states,
             final_safety_values.reshape(-1, 1),
             reward.reshape(-1, 1),
@@ -120,7 +124,8 @@ class SafetyEnvRecordVideo(RecordVideo):
     def step(self, action):
         """Step the environment, recording a frame while :attr:`recording` is set."""
         (observations, states, 
-         safety_states, safety_values, final_safety_states, final_safety_values, 
+         safety_states, safety_values, 
+         final_states, final_safety_states, final_safety_values, 
          reward, terminated, truncated, final_push_event, info) = self.env.step(action)
         self.step_id += 1
 
@@ -131,4 +136,4 @@ class SafetyEnvRecordVideo(RecordVideo):
             if len(self.recorded_frames) > self.video_length:
                 self.stop_recording()
 
-        return observations, states, safety_states, safety_values, final_safety_states, final_safety_values, reward, terminated, truncated, final_push_event, info
+        return observations, states, safety_states, safety_values, final_states, final_safety_states, final_safety_values, reward, terminated, truncated, final_push_event, info

@@ -145,11 +145,17 @@ class ReachAvoidPPO(Agent):
 
     def update(self) -> torch.Tensor:
         with torch.no_grad():
+            # Last value for reward-based GAE bootstrap
             critic_input = self.buffer.get_tensor_by_name("next_states")[-1]
             last_values, _, _ = self.value_critic(critic_input)
-            last_ra, _, _ = self.ra_critic(critic_input)
             last_values = self.value_standardizer.destandardize(last_values)
-            last_ra = self.ra_standardizer.destandardize(last_ra)
+
+            # RA value for every actual next state
+            next_states = self.buffer.get_tensor_by_name("next_states")
+            next_states_flat = next_states.reshape(-1, next_states.shape[-1])
+            next_ra_preds, _, _ = self.ra_critic(next_states_flat)
+            next_ra_preds = self.ra_standardizer.destandardize(next_ra_preds)
+            next_ra_preds = next_ra_preds.reshape(self.buffer.buffer_size, -1, 1)
         
         # GAE calculation (value critic)
         self.buffer.compute_value_gae(last_values, self.value_discount_factor, self.gae_lambda)
@@ -160,7 +166,7 @@ class ReachAvoidPPO(Agent):
         self.buffer.set_tensor_by_name("value_returns", returns.reshape(self.buffer.buffer_size, -1, 1))
 
         # GAE calculation (ra critic)
-        self.buffer.compute_ra_gae(last_ra, self.ra_discount_factor, self.gae_lambda)
+        self.buffer.compute_ra_gae(next_ra_preds, self.ra_discount_factor, self.gae_lambda)
         # standardization
         ra_preds = self.ra_standardizer.standardize(self.buffer.get_tensor_by_name("ra_preds").reshape(-1, 1), update=True)
         ra_returns = self.ra_standardizer.standardize(self.buffer.get_tensor_by_name("ra_returns").reshape(-1, 1), update=True)
@@ -237,8 +243,7 @@ class ReachAvoidPPO(Agent):
 
                 # reach-avoid critic loss
                 continuation, _, _ = self.ra_critic(sampled_states, update_rms=not epoch)
-                targets = self._compute_ra_target(sampled_next_states, sampled_g, sampled_l)
-                ra_loss = F.mse_loss(continuation, targets)
+                ra_loss = F.mse_loss(sampled_ra_returns, continuation)
 
                 # value critic loss
                 predicted_values, _, _ = self.value_critic(sampled_states, update_rms=not epoch)

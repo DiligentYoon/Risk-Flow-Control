@@ -309,6 +309,7 @@ def main():
                 next_states,
                 next_safety_states,
                 next_safety_values,
+                final_states,
                 final_safety_states,
                 final_safety_values,
                 rewards,

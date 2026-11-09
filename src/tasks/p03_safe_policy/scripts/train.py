@@ -201,6 +201,7 @@ def main():
                 next_states,
                 next_safety_states,
                 next_safety_values,
+                final_states,
                 final_safety_states,
                 final_safety_values,
                 rewards,
@@ -245,7 +246,7 @@ def main():
                               g_values=g_values,
                               l_values=l_values,
                               next_observations=next_obs,
-                              next_states=next_states,
+                              next_states=final_states, # for truncation bootstrapping in Reach-Avoid PPO algorithm
                               truncated=truncated,
                               terminated=terminated,
                               infos=infos)
