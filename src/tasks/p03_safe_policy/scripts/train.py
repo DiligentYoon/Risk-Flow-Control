@@ -75,9 +75,14 @@ def main():
         print(e)
         return
 
-    env_cfg.seed = args_cli.seed
-    cfg["agent"]["seed"] = args_cli.seed
-    pred_cfg["agent"]["seed"] = args_cli.seed
+    if args_cli.seed is not None:
+        env_cfg.seed = args_cli.seed
+        cfg["agent"]["seed"] = args_cli.seed
+        pred_cfg["agent"]["seed"] = args_cli.seed
+    else:
+        env_cfg.seed = cfg.get("seed", 42)
+        cfg["agent"]["seed"] = cfg.get("seed", 42) # 42 is a default seed (equal to env)
+        pred_cfg["agent"]["seed"] = cfg.get("seed", 42)
 
     if args_cli.predictor_checkpoint is not None:
         predictor_checkpoint = os.path.abspath(args_cli.predictor_checkpoint)
@@ -183,6 +188,7 @@ def main():
     CLI_logging_step = 0
     CLI_logging_interval = min(512, max(256, buffer.buffer_size))
     
+    M = cfg["models"]["ra_value"]["M"]
     anchor_safety_value = pred_agent.predict(safety_states)
     next_pred_safety_value = torch.zeros_like(anchor_safety_value, dtype=torch.float32, device=env.device)
     g_values = torch.zeros_like(anchor_safety_value, dtype=torch.float32, device=env.device)
@@ -228,9 +234,8 @@ def main():
             next_infos["reward"]["Task Penalty / Common_Prediction_Error"] = pred_error_penalty
 
             # reach-avoid value
-            M = cfg["models"]["ra_value"]["M"]
             g_values = torch.where(terminated, M, -M) # failure set
-            l_values = torch.where(next_pred_safety_value < 0, -M, M) # target set
+            l_values = torch.where((next_pred_safety_value < 0) & (torch.abs(next_pred_safety_value - final_safety_values) < 1e-1), -M,  M) # target set
 
             # ========================================================================================== #
             
@@ -257,7 +262,7 @@ def main():
                 t2_rollout = time.time()
 
                 t1_update = time.time()
-                policy_loss, value_loss, ra_loss, entropy_loss, approx_kl, learning_rate = agent.update()
+                reward_policy_loss, ra_policy_loss, value_loss, ra_loss, entropy_loss, approx_kl, learning_rate = agent.update()
                 t2_update = time.time()
             else:
                 raise RuntimeError("Discrepency appears between Buffer Logic and Rollout Policy.")
@@ -299,7 +304,8 @@ def main():
         tracking_data["Reward / Instantaneous reward (mean)"].append(torch.mean(logged_reward).item())
 
         if timestep % buffer.buffer_size == 0:
-            tracking_data["Loss / Policy Loss"].append(policy_loss)
+            tracking_data["Loss / Reward Policy Loss"].append(reward_policy_loss)
+            tracking_data["Loss / RA Policy Loss"].append(ra_policy_loss)
             tracking_data["Loss / Value Loss"].append(value_loss)
             tracking_data["Loss / RA Value Loss"].append(ra_loss)
 
@@ -361,16 +367,17 @@ def main():
             content_width = 64
             line_header = f"Step Progress {timestep} / {cfg['train']['timesteps']}"
             line_time_header = f"Time Progress  {e_h:02d}:{e_m:02d}:{e_s:02d}/{c_h:02d}:{c_m:02d}:{c_s:02d}"
-            line_rollout_time = f"Rollout Time      : {t2_rollout - t1_rollout:6.3f} sec"
-            line_train_time = f"Training Time     : {t2_update - t1_update:6.3f} sec"
-            line_value_loss = f"Value Loss        : {value_loss:6.3f}"
-            line_ra_loss = f"RA Loss           : {ra_loss:6.3f}"   
-            line_policy_loss = f"Policy Loss       : {policy_loss:6.3f}"
-            line_entropy_loss = f"Entropy Loss      : {entropy_loss:6.3f}"
-            line_approx_kl = f"Approximate KL    : {approx_kl:6.3f}"
-            line_episode_step = f"Avg Episode Step  : {ep_step}"
-            line_per_step_reward = f"Per-Step Rewards  : {per_r}"
-            line_episode_reward = f"Epiode Rewards    : {ep_r}"
+            line_rollout_time = f"Rollout Time       : {t2_rollout - t1_rollout:6.3f} sec"
+            line_train_time = f"Training Time      : {t2_update - t1_update:6.3f} sec"
+            line_value_loss = f"Value Loss         : {value_loss:6.3f}"
+            line_ra_loss = f"RA Loss            : {ra_loss:6.3f}"   
+            line_reward_policy_loss = f"Reward Policy Loss : {reward_policy_loss:6.3f}"
+            line_ra_policy_loss = f"RA Policy Loss     : {ra_policy_loss:6.3f}"
+            line_entropy_loss = f"Entropy Loss       : {entropy_loss:6.3f}"
+            line_approx_kl = f"Approximate KL     : {approx_kl:6.3f}"
+            line_episode_step = f"Avg Episode Step   : {ep_step}"
+            line_per_step_reward = f"Per-Step Rewards   : {per_r}"
+            line_episode_reward = f"Epiode Rewards     : {ep_r}"
 
             print(f" ________________________________________________________________")
             print(f"|                                                                |")
@@ -382,7 +389,8 @@ def main():
             print(f"| {line_train_time:<{content_width-1}}|")
             print(f"| {line_value_loss:<{content_width-1}}|")
             print(f"| {line_ra_loss:<{content_width-1}}|")
-            print(f"| {line_policy_loss:<{content_width-1}}|")
+            print(f"| {line_reward_policy_loss:<{content_width-1}}|")
+            print(f"| {line_ra_policy_loss:<{content_width-1}}|")
             print(f"| {line_entropy_loss:<{content_width-1}}|")
             print(f"| {line_approx_kl:<{content_width-1}}|")
             print(f"| {line_episode_step:<{content_width-1}}|")

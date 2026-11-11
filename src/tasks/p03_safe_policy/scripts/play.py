@@ -14,7 +14,7 @@ parser.add_argument("--video_interval", type=int, default=2000, help="Interval b
 parser.add_argument("--disable_fabric", type=bool, default=False, help="Disable fabric and use USD I/O operations.")
 parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default="R1-safe-play", help="Name of the task.")
-parser.add_argument("--checkpoint", type=str, default=None, help="Path to model checkpoint.")
+parser.add_argument("--checkpoint", type=str, default="logs/r1_loco/2026-10-29_17-29-17_mappo/Predictor/2026-10-29_22-54-23/2026-10-29_23-01-25/safe_policy/2026-11-11_14-43-24_ppo/agent_52000.pt", help="Path to model checkpoint.")
 parser.add_argument("--predictor_checkpoint", type=str, default="logs/r1_loco/2026-10-29_17-29-17_mappo/Predictor/2026-10-29_22-54-23/2026-10-29_23-01-25/agent_10000.pt", help="Path to safety value network checkpoint.")
 parser.add_argument("--initial_dataset", type=str, default="logs/r1_loco/2026-10-29_17-29-17_mappo/Predictor/2026-10-29_22-54-23/2026-10-29_23-01-25/collected/risk_init_dataset.pt", help="Path to Risk Initial dataset.")
 
@@ -73,9 +73,14 @@ def main():
         print(e)
         return
 
-    env_cfg.seed = args_cli.seed
-    cfg["agent"]["seed"] = args_cli.seed
-    pred_cfg["agent"]["seed"] = args_cli.seed
+    if args_cli.seed is not None:
+        env_cfg.seed = args_cli.seed
+        cfg["agent"]["seed"] = args_cli.seed
+        pred_cfg["agent"]["seed"] = args_cli.seed
+    else:
+        env_cfg.seed = cfg.get("seed", 42)
+        cfg["agent"]["seed"] = cfg.get("seed", 42) # 42 is a default seed (equal to env)
+        pred_cfg["agent"]["seed"] = cfg.get("seed", 42)
 
     if args_cli.checkpoint is not None:
         checkpoint = os.path.abspath(args_cli.checkpoint)
@@ -208,6 +213,7 @@ def main():
             ) = env.step(actions)
             # safety value-based reward
             current_pred_reach_avoid_value, _, _ = agent.ra_critic(states)
+            current_pred_reach_avoid_value = agent.ra_standardizer.destandardize(current_pred_reach_avoid_value)
             current_pred_safety_value = pred_agent.predict(safety_states)
             next_pred_safety_value = pred_agent.predict(final_safety_states)
             delta_safety_reward =  (anchor_safety_value - next_pred_safety_value).clamp(min=-1, max=1)

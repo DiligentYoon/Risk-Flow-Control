@@ -15,7 +15,7 @@ from tasks.p03_1_safe_policy.envs.mdp.randomizer import reset_state_from_dataset
 @configclass
 class R1SafeEnvCfg(R1BaseEnvCfg):
     ## ==================== Environment parameters ==================== ##
-    episode_length_s = 4.0
+    episode_length_s = 3.0
     sim_dt = 0.005
     decimation = 4
 
@@ -49,7 +49,7 @@ class R1SafeEnvCfg(R1BaseEnvCfg):
     r_success: float = 200
     r_delta_safety: float = 5.0
     
-    p_pred_error: float = 5.0
+    p_pred_error: float = 10.0
     p_lin_vel: float = 0.1
     p_ang_vel_xy: float = 0.2
     

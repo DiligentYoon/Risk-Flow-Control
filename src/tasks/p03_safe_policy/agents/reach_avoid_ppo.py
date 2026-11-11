@@ -95,14 +95,6 @@ class ReachAvoidPPO(Agent):
 
         return raw_actions, log_prob, entropy                       # Add raw action which is inserted into buffer
 
-    @torch.no_grad()
-    def _compute_ra_target(self, next_states: torch.Tensor, g_values: torch.Tensor, l_values: torch.Tensor) -> torch.Tensor:
-        continuation_next, _, _ = self.ra_critic(next_states, update_rms=False)
-        next_g = g_values.reshape(-1, 1)
-        next_l = l_values.reshape(-1, 1)
-        next_value = torch.maximum(next_g, torch.minimum(next_l, continuation_next))
-        return self.ra_discount_factor * next_value
-
     def insert_data(self,
                     observations: torch.Tensor,
                     states: Union[torch.Tensor | None],
@@ -174,7 +166,8 @@ class ReachAvoidPPO(Agent):
         self.buffer.set_tensor_by_name("ra_returns", ra_returns.reshape(self.buffer.buffer_size, -1, 1))
         
         # Loss initialization
-        cumulative_policy_loss = 0
+        cumulative_reward_policy_loss = 0
+        cumulative_ra_policy_loss = 0
         cumulative_entropy_loss = 0
         cumulative_value_loss = 0
         cumulative_ra_loss = 0
@@ -261,7 +254,8 @@ class ReachAvoidPPO(Agent):
                 self.optimizer.step()
 
                 # Update cumulative losses
-                cumulative_policy_loss += policy_loss.item()
+                cumulative_reward_policy_loss += reward_policy_loss.item()
+                cumulative_ra_policy_loss += ra_policy_loss.item()
                 cumulative_value_loss += value_loss.item()
                 cumulative_ra_loss += ra_loss.item()
                 if self.entropy_loss_scale:
@@ -277,10 +271,11 @@ class ReachAvoidPPO(Agent):
 
         self.set_running_mode("eval")
 
-        mean_policy_loss = cumulative_policy_loss / (self.learning_epochs * self.mini_batches)
+        mean_reward_policy_loss = cumulative_reward_policy_loss / (self.learning_epochs * self.mini_batches)
+        mean_ra_policy_loss = cumulative_ra_policy_loss / (self.learning_epochs * self.mini_batches)
         mean_value_loss = cumulative_value_loss / (self.learning_epochs * self.mini_batches)
         mean_ra_loss = cumulative_ra_loss / (self.learning_epochs * self.mini_batches)
         mean_entropy_loss = cumulative_entropy_loss / (self.learning_epochs * self.mini_batches)
         mean_kl_divergence = kl
         
-        return mean_policy_loss, mean_value_loss, mean_ra_loss, mean_entropy_loss, mean_kl_divergence, learning_rate
+        return mean_reward_policy_loss, mean_ra_policy_loss, mean_value_loss, mean_ra_loss, mean_entropy_loss, mean_kl_divergence, learning_rate

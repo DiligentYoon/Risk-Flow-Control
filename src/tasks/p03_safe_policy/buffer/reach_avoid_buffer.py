@@ -71,23 +71,38 @@ class ReachAvoidBuffer(Buffer):
 
     def compute_ra_gae(self, next_ra_preds: torch.Tensor, gamma: float, lamb: float):
         """Compute Generalized Advantage Expectation (GAE) with perspective of Reach-Avoid"""
-        return_tensor = torch.zeros_like(self.tensors['ra_returns'], dtype=torch.float32, device=self.device)
-        advantage_tensor = torch.zeros_like(self.tensors['ra_advantages'], dtype=torch.float32, device=self.device)
         rollout = self.buffer_size
 
         ra_preds = self.tensors["ra_preds"] # [T, E, 1]
         g_values = self.tensors["g_values"]
         l_values = self.tensors["l_values"]
+        mask = self.tensors["terminated"] | self.tensors["truncated"]
 
-        ra_targets = gamma * torch.maximum(g_values, torch.minimum(l_values, next_ra_preds))
+        lamb_power = lamb
+        phi = gamma * torch.maximum(g_values, torch.minimum(l_values, next_ra_preds))
+        ra_returns = (1.0 - lamb) * phi
+        for k in range(2, rollout+1):
+            phi_next = phi.clone()
+            phi_k = torch.empty_like(phi)
 
-        advantage_tensor = ra_preds - ra_targets
-        return_tensor = ra_targets
+            boundary = torch.where(mask[:-1], next_ra_preds[:-1], phi_next[1:])
+            phi_k[:-1] = gamma * torch.maximum(g_values[:-1], torch.minimum(l_values[:-1], boundary))
+            phi_k[-1] = gamma * torch.maximum(g_values[-1], torch.minimum(l_values[-1], next_ra_preds[-1]))
 
-        advantage_tensor = (advantage_tensor - advantage_tensor.mean()) / (advantage_tensor.std() + 1e-8)
+            if k < rollout:
+                ra_returns += (1.0 - lamb) * lamb_power * phi_k
+            else:
+                ra_returns += lamb_power * phi_k
 
-        self.set_tensor_by_name("ra_returns", return_tensor)
-        self.set_tensor_by_name("ra_advantages", advantage_tensor)
+            phi = phi_k
+            lamb_power *= lamb
+
+        ra_advantages = ra_preds - ra_returns
+
+        ra_advantages = (ra_advantages - ra_advantages.mean()) / (ra_advantages.std() + 1e-8)
+
+        self.set_tensor_by_name("ra_returns", ra_returns)
+        self.set_tensor_by_name("ra_advantages", ra_advantages)
         
 
 
