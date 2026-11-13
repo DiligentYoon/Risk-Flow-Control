@@ -10,11 +10,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from lib.agent.multi_agent import MultiAgent
-from lib.buffer.rolloutbuffer import RolloutBuffer
 from lib.utils.Running_mean_std import RunningMeanStd
 from lib.utils.Learning_rate_scheduler import KLAdaptiveLR
-
 from lib.utils.wrapper_utils import unflatten_tensorized_space
+
+from ..buffer.reach_avoid_buffer import ReachAvoidBuffer
 
 class ReachAvoidMAPPO(MultiAgent):
     def __init__(self,
@@ -23,7 +23,7 @@ class ReachAvoidMAPPO(MultiAgent):
                  action_space: gym.Space,
                  possible_agents: Sequence[str],
                  model: Dict[str, Union[nn.Module, Dict[str, nn.Module]]],
-                 buffer: Dict[str, RolloutBuffer] | None,
+                 buffer: Dict[str, ReachAvoidBuffer] | None,
                  device: Union[str, torch.device],
                  cfg: Dict) -> None:
         super().__init__(possible_agents, observation_space, state_space, action_space, cfg, model, device)
@@ -73,8 +73,7 @@ class ReachAvoidMAPPO(MultiAgent):
             self.optimizers[uid] = torch.optim.Adam(itertools.chain(actor.parameters(), 
                                                                     value_critic.parameters(),
                                                                     ra_critic.parameters()), lr=self.learning_rate)
-            self.checkpoint_modules[uid]["optimizer"] = self.optimizers[uid]
-
+            
         # Set up learning rate scheduler
         if self.learning_rate_scheduler is not None:
             self.learning_rate_scheduler = {}
@@ -172,7 +171,7 @@ class ReachAvoidMAPPO(MultiAgent):
                                          g_values=g_values,
                                          l_values=l_values,
                                          next_observations=next_observations[uid],
-                                         nexT_states=next_states[uid],
+                                         next_states=next_states[uid],
                                          truncated=truncated,
                                          terminated=terminated,
                                          action_log_probs=buffer_action_log_probs[:, i].unsqueeze(-1),
@@ -184,11 +183,19 @@ class ReachAvoidMAPPO(MultiAgent):
         Algorithm's main update step
         """
         # Loss initialization
-        cumulative_policy_loss = 0
+        cumulative_reward_policy_loss = 0
+        cumulative_ra_policy_loss = 0
         cumulative_entropy_loss = 0
         cumulative_value_loss = 0
+        cumulative_ra_loss = 0
         cumulative_approx_kl = 0
         learning_rate = {uid: 0.0 for uid in self.possible_agents}
+
+        # Grad initialization
+        cumulative_grad_cosine = 0
+        cumulative_grad_conflict = 0
+        minimum_grad_cosine = 0
+        maximum_grad_cosine = 0
 
         for uid in self.possible_agents:
             with torch.no_grad():
@@ -204,12 +211,12 @@ class ReachAvoidMAPPO(MultiAgent):
                 next_ra_preds = next_ra_preds.reshape(self.buffer[uid].buffer_size, -1, 1)
             
             # GAE Calculation
-            self.buffer[uid].compute_gae(last_values, self.discount_factor, self.gae_lambda)
+            self.buffer[uid].compute_value_gae(last_values, self.discount_factor, self.gae_lambda)
             # Value Standardization
             value_preds = self.value_standardizers[uid].standardize(self.buffer[uid].get_tensor_by_name("value_preds").reshape(-1, 1), update=True)
-            returns = self.value_standardizers[uid].standardize(self.buffer[uid].get_tensor_by_name("returns").reshape(-1, 1), update=True)
+            returns = self.value_standardizers[uid].standardize(self.buffer[uid].get_tensor_by_name("value_returns").reshape(-1, 1), update=True)
             self.buffer[uid].set_tensor_by_name("value_preds", value_preds.reshape(self.buffer[uid].buffer_size, -1, 1))
-            self.buffer[uid].set_tensor_by_name("returns", returns.reshape(self.buffer[uid].buffer_size, -1, 1))
+            self.buffer[uid].set_tensor_by_name("value_returns", returns.reshape(self.buffer[uid].buffer_size, -1, 1))
 
             # GAE calculation (ra critic)
             self.buffer[uid].compute_ra_gae(next_ra_preds, self.ra_discount_factor, self.gae_lambda)
@@ -267,42 +274,68 @@ class ReachAvoidMAPPO(MultiAgent):
                     else:
                         entropy_loss = 0
 
-                    # Compute policy loss
+                    # policy loss
                     ratio = torch.exp(new_log_probs - sampled_action_log_probs)
                     surrogate = sampled_value_advantages * ratio
                     surrogate_clipped = sampled_value_advantages * torch.clip(ratio, 
-                                                                            1.0 - self.ratio_clip, 
-                                                                            1.0 + self.ratio_clip)
+                                                                              1.0 - self.ratio_clip, 
+                                                                              1.0 + self.ratio_clip)
                     reward_policy_loss = -torch.min(surrogate, surrogate_clipped).mean()
 
                     # policy loss (ra-driven)
                     ra_surrogate = sampled_ra_advantages * ratio
                     ra_surrogate_clipped = sampled_ra_advantages * torch.clip(ratio, 
-                                                                            1.0 - self.ratio_clip,
-                                                                            1.0 + self.ratio_clip)
+                                                                              1.0 - self.ratio_clip,
+                                                                              1.0 + self.ratio_clip)
                     ra_policy_loss = -torch.min(ra_surrogate, ra_surrogate_clipped).mean()
                     
                     policy_loss = self.value_loss_scale * reward_policy_loss + self.ra_loss_scale * ra_policy_loss
-
-                    # Compute value loss
-                    predicted_values, _, _ = self.value_critics[uid](critic_input, update_rms=not epoch)
-                    value_loss = self.value_loss_scale * F.mse_loss(sampled_value_returns, predicted_values)
                     
+                    # reach-avoid critic loss
+                    continuation, _, _ = self.ra_critics[uid](sampled_states, update_rms=not epoch)
+                    ra_loss = F.mse_loss(sampled_ra_returns, continuation)
+
+                    # value critic loss
+                    predicted_values, _, _ = self.value_critics[uid](sampled_states, update_rms=not epoch)
+                    value_loss = F.mse_loss(sampled_value_returns, predicted_values)
+
+                    # Update cumulative losses
+                    cumulative_reward_policy_loss += reward_policy_loss.item()
+                    cumulative_ra_policy_loss += ra_policy_loss.item()
+                    cumulative_value_loss += value_loss.item()
+                    cumulative_ra_loss += ra_loss.item()
+                    cumulative_approx_kl += kl_divergence.item()
+                    if self.entropy_loss_scale:
+                        cumulative_entropy_loss += entropy_loss.item()
+
+                    # Update cumulative gradient conflict
+                    actor_params = [p for p in self.actors[uid].parameters() if p.requires_grad]
+                    grad_reward = torch.autograd.grad(reward_policy_loss, actor_params, retain_graph=True, allow_unused=True)
+                    grad_ra = torch.autograd.grad(ra_policy_loss, actor_params, retain_graph=True, allow_unused=True)
+
+                    dot = torch.zeros((), device=self.actors[uid].device)
+                    norm_r = torch.zeros((), device=self.actors[uid].device)
+                    norm_ra = torch.zeros((), device=self.actors[uid].device)
+                    for gr, gra in zip(grad_reward, grad_ra):
+                        norm_r += gr.detach().square().sum()
+                        norm_ra += gra.detach().square().sum()
+                        dot += (gr.detach() * gra.detach()).sum()
+                    grad_cosine = dot / (torch.sqrt(norm_r) * torch.sqrt(norm_ra) + 1e-12)
+                    grad_conflict = (dot < 0).float()
+
+                    cumulative_grad_cosine += grad_cosine.item()
+                    cumulative_grad_conflict += grad_conflict.item()
+                    minimum_grad_cosine = min(minimum_grad_cosine, grad_cosine.item())
+                    maximum_grad_cosine = max(maximum_grad_cosine, grad_cosine.item())
+
                     # Optimization step
                     self.optimizers[uid].zero_grad()
-                    (policy_loss + entropy_loss + value_loss).backward()
+                    (policy_loss + entropy_loss + value_loss + ra_loss).backward()
 
                     if self.grad_norm_clip > 0:
                         nn.utils.clip_grad_norm_(itertools.chain(self.actors[uid].parameters(), self.value_critics[uid].parameters()), self.grad_norm_clip)
                     
                     self.optimizers[uid].step()
-
-                    # Update cumulative losses
-                    cumulative_policy_loss += policy_loss.item()
-                    cumulative_value_loss += value_loss.item()
-                    cumulative_approx_kl += kl_divergence.item()
-                    if self.entropy_loss_scale:
-                        cumulative_entropy_loss += entropy_loss.item()
                 
             # Learning rate scheduler update
             if self.learning_rate_scheduler is not None:
@@ -312,13 +345,31 @@ class ReachAvoidMAPPO(MultiAgent):
             else:
                 learning_rate[uid] = self.optimizers[uid].param_groups[0]["lr"]
                     
-
         self.set_running_mode("eval")
-        mean_policy_loss = cumulative_policy_loss / (self.learning_epochs * self.mini_batches * self.num_agents)
+        mean_reward_policy_loss = cumulative_reward_policy_loss / (self.learning_epochs * self.mini_batches * self.num_agents)
+        mean_ra_policy_loss = cumulative_ra_policy_loss / (self.learning_epochs * self.mini_batches * self.num_agents)
         mean_value_loss = cumulative_value_loss / (self.learning_epochs * self.mini_batches * self.num_agents)
+        mean_ra_loss = cumulative_ra_loss / (self.learning_epochs * self.mini_batches * self.num_agents)
         mean_entropy_loss = cumulative_entropy_loss / (self.learning_epochs * self.mini_batches * self.num_agents)
         mean_kl_divergence = cumulative_approx_kl / (self.learning_epochs * self.mini_batches * self.num_agents)
 
+        mean_grad_cosine = cumulative_grad_cosine / (self.learning_epochs * self.mini_batches * self.num_agents)
+        grad_conflict_rate = cumulative_grad_conflict / (self.learning_epochs * self.mini_batches * self.num_agents)
 
-        return mean_policy_loss, mean_value_loss, mean_entropy_loss, mean_kl_divergence, learning_rate
+        return {
+            "reward_policy_loss": mean_reward_policy_loss, 
+            "ra_policy_loss": mean_ra_policy_loss, 
+            "value_loss": mean_value_loss, 
+            "ra_loss": mean_ra_loss, 
+            "entropy_loss": mean_entropy_loss,
+
+            "grad_cosine": mean_grad_cosine,
+            "max_grad_cosine": maximum_grad_cosine,
+            "min_grad_cosine": minimum_grad_cosine,
+            "grad_conflict_rate": grad_conflict_rate,
+
+            "approx_kl": mean_kl_divergence,
+            "learning_rate": learning_rate
+        }
+
             

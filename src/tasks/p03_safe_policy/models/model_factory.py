@@ -74,7 +74,25 @@ class ReachAvoidModelFactory:
 
     def generate_models(self) -> dict[str, Model]:
         if self.model_cfg["multi_agent"]:
-            raise RuntimeError("Not yet!")
+            models = {}
+            for uid in self.possible_agents:
+                actor = ReachAvoidActor(num_observations=self.observation_size[uid],
+                                        num_actions=self.action_size[uid],
+                                        min_log_std=self.model_cfg["policy"]["min_log_std"],
+                                        max_log_std=self.model_cfg["policy"]["max_log_std"],
+                                        squash=self.model_cfg["squashed"],
+                                        device=self.device)
+                value_critic = ValueCritic(num_states=self.state_size[uid],
+                                           device=self.device)
+                ra_critic = ReachAvoidCritic(num_states=self.state_size[uid],
+                                             device=self.device,
+                                             M=self.model_cfg["ra_value"]["M"])
+
+                models[uid] = {
+                                'actor': actor,
+                                'value_critic': value_critic,
+                                'ra_critic': ra_critic,
+                              }
         else:
             actor = ReachAvoidActor(num_observations=self.observation_size,
                                     num_actions=self.action_size,

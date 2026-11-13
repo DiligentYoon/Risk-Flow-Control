@@ -22,3 +22,4 @@ collection:
   max_timestep: 64000
   persistent_risk_steps: 10
   risk_threshold: 0.0
+  risk_upper_bound: 0.5

@@ -76,8 +76,9 @@ def extract_physical_snapshot(info) -> dict[str, torch.Tensor]:
         "prev_action":       info["prev_action"].clone(),
     }
 
-def update_risk_streak(risk_streak: torch.Tensor, risk_values: torch.Tensor, threshold: float) -> torch.Tensor:
-    risky = risk_values > threshold
+def update_risk_streak(risk_streak: torch.Tensor, risk_values: torch.Tensor, threshold: float, upper_bound: float) -> torch.Tensor:
+    # risky = threshold < risk_values < upper_bound
+    risky = threshold < risk_values 
     risk_streak[:] = torch.where(risky, risk_streak + 1, torch.zeros_like(risk_streak))
     return risk_streak
 
@@ -284,6 +285,7 @@ def main():
     log_interval = 500
     persistent_steps = int(collection_cfg.get("persistent_risk_steps", 10))
     risk_threshold = float(collection_cfg.get("risk_threshold", 0.0))
+    risk_upper_bound = float(collection_cfg.get("risk_upper_bound"), 1.0)
     
     risk_streak = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
     collected = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
@@ -297,7 +299,7 @@ def main():
             pred_values = pred_agent.predict(safety_states).squeeze(-1)
             snapshot = extract_physical_snapshot(infos["collection"])
 
-            risk_streak = update_risk_streak(risk_streak, pred_values, risk_threshold)
+            risk_streak = update_risk_streak(risk_streak, pred_values, risk_threshold, risk_upper_bound)
             persistent_mask = (risk_streak == persistent_steps) & ~collected # 최초감지 state에 대해 저장 & 에피소드당 최대 1개
             risk_buffer.add(snapshot=snapshot, risk_scores=pred_values, mask=persistent_mask)
             collected[persistent_mask] = True

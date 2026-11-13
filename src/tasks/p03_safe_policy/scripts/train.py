@@ -19,7 +19,7 @@ parser.add_argument("--initial_dataset", type=str, default="logs/r1_loco/2026-10
 
 parser.add_argument("--algorithm",
                     type=str,
-                    default="PPO",
+                    default="MAPPO",
                     choices=["PPO", "SAC", "TD3", "MAPPO"],
                     help="The RL algorithm used for training the agent.")
 
@@ -143,7 +143,15 @@ def main():
 
     # ====================== Agent Spawn  ==========================
     if multi_agent:
-        raise RuntimeError("Not yet!")
+        from tasks.p03_safe_policy.agents.reach_avoid_mappo import ReachAvoidMAPPO
+        agent = ReachAvoidMAPPO(observation_space=env.observation_space,
+                                state_space=env.state_space,
+                                action_space=env.action_space,
+                                possible_agents=model_factory.possible_agents,
+                                model=models,
+                                buffer=buffer,
+                                device=env.device,
+                                cfg=cfg["agent"])
     else:
         from tasks.p03_safe_policy.agents.reach_avoid_ppo import ReachAvoidPPO
         agent = ReachAvoidPPO(model=models,
@@ -186,14 +194,21 @@ def main():
     timestep = 0
     elapsed_time = 0
     CLI_logging_step = 0
-    CLI_logging_interval = min(512, max(256, buffer.buffer_size))
+    CLI_logging_interval = min(512, max(256, cfg["buffer"]["buffer_size"]))
     
     M = cfg["models"]["ra_value"]["M"]
+    target_value_thr = cfg["models"]["ra_value"]["value_thr"]
+    target_fidelity_thr = cfg["models"]["ra_value"]["fidelity_thr"]
     anchor_safety_value = pred_agent.predict(safety_states)
     next_pred_safety_value = torch.zeros_like(anchor_safety_value, dtype=torch.float32, device=env.device)
     g_values = torch.zeros_like(anchor_safety_value, dtype=torch.float32, device=env.device)
     l_values = torch.zeros_like(anchor_safety_value, dtype=torch.float32, device=env.device)
-    
+
+    target_reached = torch.zeros_like(anchor_safety_value, dtype=torch.bool, device=env.device)
+    next_target_reached = torch.zeros_like(anchor_safety_value, dtype=torch.bool, device=env.device)
+    target_reached_mask = torch.zeros_like(anchor_safety_value, dtype=torch.bool, device=env.device)
+    continuous_target_reach = torch.zeros_like(anchor_safety_value, dtype=torch.long, device=env.device)
+
     # Simulate environment
     while simulation_app.is_running() and timestep <= cfg["train"]["timesteps"]:
 
@@ -216,7 +231,7 @@ def main():
                 final_push_events,
                 next_infos,
             ) = env.step(actions)
-            # ========================= Additional Reward & Reach-Avoid Term ============================ #
+            # ========================= Additional Reward & Reach-Avoid Analysis ============================ #
             # safety value-based reward
             next_pred_safety_value = pred_agent.predict(final_safety_states)
             delta_safety_reward =  (anchor_safety_value - next_pred_safety_value).clamp(min=-1, max=1)
@@ -234,8 +249,11 @@ def main():
             next_infos["reward"]["Task Penalty / Common_Prediction_Error"] = pred_error_penalty
 
             # reach-avoid value
+            next_target_reached = (next_pred_safety_value < target_value_thr) & (torch.abs(next_pred_safety_value - final_safety_values) < target_fidelity_thr)
+            continuous_target_reach = torch.where(target_reached & next_target_reached, continuous_target_reach + 1, 0)
+            target_reached_mask |= continuous_target_reach >= 10
             g_values = torch.where(terminated, M, -M) # failure set
-            l_values = torch.where((next_pred_safety_value < 0) & (torch.abs(next_pred_safety_value - final_safety_values) < 1e-1), -M,  M) # target set
+            l_values = torch.where(target_reached_mask, -M,  M) # target set
 
             # ========================================================================================== #
             
@@ -257,15 +275,12 @@ def main():
                               infos=infos)
         
         # Parameter update
-        if timestep % buffer.buffer_size == 0:
-            if buffer.memory_index == 0:
-                t2_rollout = time.time()
-
-                t1_update = time.time()
-                reward_policy_loss, ra_policy_loss, value_loss, ra_loss, entropy_loss, approx_kl, learning_rate = agent.update()
-                t2_update = time.time()
-            else:
-                raise RuntimeError("Discrepency appears between Buffer Logic and Rollout Policy.")
+        if timestep % cfg["buffer"]["buffer_size"] == 0:
+            t2_rollout = time.time()
+            t1_update = time.time()
+            # Update
+            train_info = agent.update()
+            t2_update = time.time()
             
         # =============== Logging Phase ================
 
@@ -297,17 +312,25 @@ def main():
             # reset the cumulative rewards and timesteps
             cumulative_rewards[finished_episodes] = 0
             cumulative_timesteps[finished_episodes] = 0
+            # reset target set checker
+            continuous_target_reach[finished_episodes] = 0
+            target_reached_mask[finished_episodes] = False
 
         # record data
         tracking_data["Reward / Instantaneous reward (max)"].append(torch.max(logged_reward).item())
         tracking_data["Reward / Instantaneous reward (min)"].append(torch.min(logged_reward).item())
         tracking_data["Reward / Instantaneous reward (mean)"].append(torch.mean(logged_reward).item())
 
-        if timestep % buffer.buffer_size == 0:
-            tracking_data["Loss / Reward Policy Loss"].append(reward_policy_loss)
-            tracking_data["Loss / RA Policy Loss"].append(ra_policy_loss)
-            tracking_data["Loss / Value Loss"].append(value_loss)
-            tracking_data["Loss / RA Value Loss"].append(ra_loss)
+        if timestep % cfg["buffer"]["buffer_size"] == 0:
+            tracking_data["Loss / Reward Policy Loss"].append(train_info["reward_policy_loss"])
+            tracking_data["Loss / RA Policy Loss"].append(train_info["ra_policy_loss"])
+            tracking_data["Loss / Value Loss"].append(train_info["value_loss"])
+            tracking_data["Loss / RA Value Loss"].append(train_info["ra_loss"])
+
+            tracking_data["Grad / Gradient Cosine (max)"].append(train_info["max_grad_cosine"])
+            tracking_data["Grad / Gradient Cosine (min)"].append(train_info["min_grad_cosine"])
+            tracking_data["Grad / Gradient Cosine (mean)"].append(train_info["grad_cosine"])
+            tracking_data["Grad / Gradient Conflict Rate"].append(train_info["grad_conflict_rate"])
 
         task_reward = next_infos.get("reward", None)
         if task_reward is not None:
@@ -369,12 +392,14 @@ def main():
             line_time_header = f"Time Progress  {e_h:02d}:{e_m:02d}:{e_s:02d}/{c_h:02d}:{c_m:02d}:{c_s:02d}"
             line_rollout_time = f"Rollout Time       : {t2_rollout - t1_rollout:6.3f} sec"
             line_train_time = f"Training Time      : {t2_update - t1_update:6.3f} sec"
-            line_value_loss = f"Value Loss         : {value_loss:6.3f}"
-            line_ra_loss = f"RA Loss            : {ra_loss:6.3f}"   
-            line_reward_policy_loss = f"Reward Policy Loss : {reward_policy_loss:6.3f}"
-            line_ra_policy_loss = f"RA Policy Loss     : {ra_policy_loss:6.3f}"
-            line_entropy_loss = f"Entropy Loss       : {entropy_loss:6.3f}"
-            line_approx_kl = f"Approximate KL     : {approx_kl:6.3f}"
+            line_value_loss = f"Value Loss         : {train_info['value_loss']:6.3f}"
+            line_ra_loss = f"RA Loss            : {train_info['ra_loss']:6.3f}"   
+            line_reward_policy_loss = f"Reward Policy Loss : {train_info['reward_policy_loss']:6.3f}"
+            line_ra_policy_loss = f"RA Policy Loss     : {train_info['ra_policy_loss']:6.3f}"
+            line_entropy_loss = f"Entropy Loss       : {train_info['entropy_loss']:6.3f}"
+            line_approx_kl = f"Approximate KL     : {train_info['approx_kl']:6.3f}"
+            line_grad_cosine = f"Grad Cosine        : {train_info['grad_cosine']:6.3f}"
+            line_grad_conflict = f"Grad Conflict      : {100 * train_info['grad_conflict_rate']:6.3f} %"
             line_episode_step = f"Avg Episode Step   : {ep_step}"
             line_per_step_reward = f"Per-Step Rewards   : {per_r}"
             line_episode_reward = f"Epiode Rewards     : {ep_r}"
@@ -393,6 +418,8 @@ def main():
             print(f"| {line_ra_policy_loss:<{content_width-1}}|")
             print(f"| {line_entropy_loss:<{content_width-1}}|")
             print(f"| {line_approx_kl:<{content_width-1}}|")
+            print(f"| {line_grad_cosine:<{content_width-1}}|")
+            print(f"| {line_grad_conflict:<{content_width-1}}|")
             print(f"| {line_episode_step:<{content_width-1}}|")
             print(f"| {line_per_step_reward:<{content_width-1}}|")
             print(f"| {line_episode_reward:<{content_width-1}}|")
@@ -407,12 +434,15 @@ def main():
             checkpoint_path_onnx = os.path.join(log_dir, f"agent_{timestep}.onnx") if not multi_agent else None
             agent.save(checkpoint_path, path_onnx=checkpoint_path_onnx)
 
-        # update
+        # update (env state)
         obs = next_obs
         states = next_states
         safety_states = next_safety_states
         safety_values = next_safety_values
         infos = next_infos
+
+        # update (ra related)
+        target_reached = next_target_reached
         
         # update anchor value
         if finished_episodes.numel():

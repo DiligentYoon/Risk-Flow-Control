@@ -14,13 +14,13 @@ parser.add_argument("--video_interval", type=int, default=2000, help="Interval b
 parser.add_argument("--disable_fabric", type=bool, default=False, help="Disable fabric and use USD I/O operations.")
 parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default="R1-safe-play", help="Name of the task.")
-parser.add_argument("--checkpoint", type=str, default="logs/r1_loco/2026-10-29_17-29-17_mappo/Predictor/2026-10-29_22-54-23/2026-10-29_23-01-25/safe_policy/2026-11-11_14-43-24_ppo/agent_52000.pt", help="Path to model checkpoint.")
+parser.add_argument("--checkpoint", type=str, default=None, help="Path to model checkpoint.")
 parser.add_argument("--predictor_checkpoint", type=str, default="logs/r1_loco/2026-10-29_17-29-17_mappo/Predictor/2026-10-29_22-54-23/2026-10-29_23-01-25/agent_10000.pt", help="Path to safety value network checkpoint.")
 parser.add_argument("--initial_dataset", type=str, default="logs/r1_loco/2026-10-29_17-29-17_mappo/Predictor/2026-10-29_22-54-23/2026-10-29_23-01-25/collected/risk_init_dataset.pt", help="Path to Risk Initial dataset.")
 
 parser.add_argument("--algorithm",
                     type=str,
-                    default="PPO",
+                    default="MAPPO",
                     choices=["PPO", "SAC", "TD3", "MAPPO"],
                     help="The RL algorithm used for training the agent.")
 
@@ -139,7 +139,15 @@ def main():
 
     # ====================== Agent Spawn  ==========================
     if multi_agent:
-        raise RuntimeError("Not yet!")
+        from tasks.p03_safe_policy.agents.reach_avoid_mappo import ReachAvoidMAPPO
+        agent = ReachAvoidMAPPO(observation_space=env.observation_space,
+                                state_space=env.state_space,
+                                action_space=env.action_space,
+                                possible_agents=model_factory.possible_agents,
+                                model=models,
+                                buffer=buffer,
+                                device=env.device,
+                                cfg=cfg["agent"])
     else:
         from tasks.p03_safe_policy.agents.reach_avoid_ppo import ReachAvoidPPO
         agent = ReachAvoidPPO(model=models,
@@ -177,6 +185,7 @@ def main():
 
     num_finished = 0
     num_terminated = 0
+    num_ra_success = 0
     tracking_data = collections.defaultdict(list)
     track_cumulative_rewards   = collections.deque(maxlen=500)
     track_cumulative_timesteps = collections.deque(maxlen=500)
@@ -187,8 +196,16 @@ def main():
     write_interval = env._unwrapped.max_episode_length
     timestep = 0
 
+    target_value_thr = cfg["models"]["ra_value"]["value_thr"]
+    target_fidelity_thr = cfg["models"]["ra_value"]["fidelity_thr"]
     anchor_safety_value = pred_agent.predict(safety_states)
     next_pred_safety_value    = torch.zeros_like(anchor_safety_value, dtype=torch.float32, device=env.device)
+    ra_success = torch.zeros_like(anchor_safety_value, dtype=torch.bool, device=env.device)
+
+    target_reached = torch.zeros_like(anchor_safety_value, dtype=torch.bool, device=env.device)
+    next_target_reached = torch.zeros_like(anchor_safety_value, dtype=torch.bool, device=env.device)
+    target_reached_mask = torch.zeros_like(anchor_safety_value, dtype=torch.bool, device=env.device)
+    continuous_target_reach = torch.zeros_like(anchor_safety_value, dtype=torch.long, device=env.device)
 
     # simulate environment
     while simulation_app.is_running():
@@ -212,8 +229,9 @@ def main():
                 next_infos,
             ) = env.step(actions)
             # safety value-based reward
-            current_pred_reach_avoid_value, _, _ = agent.ra_critic(states)
-            current_pred_reach_avoid_value = agent.ra_standardizer.destandardize(current_pred_reach_avoid_value)
+            if not multi_agent:
+                current_pred_reach_avoid_value, _, _ = agent.ra_critic(states)
+                current_pred_reach_avoid_value = agent.ra_standardizer.destandardize(current_pred_reach_avoid_value)
             current_pred_safety_value = pred_agent.predict(safety_states)
             next_pred_safety_value = pred_agent.predict(final_safety_states)
             delta_safety_reward =  (anchor_safety_value - next_pred_safety_value).clamp(min=-1, max=1)
@@ -229,6 +247,13 @@ def main():
             # Add delta safety reward to info dict for tensorboard logging
             next_infos["reward"]["Task Reward / Common_Delta_Safety_Reward"] = delta_safety_reward
             next_infos["reward"]["Task Penalty / Common_Prediction_Error"] = pred_error_penalty
+
+            # reach value
+            fail = terminated
+            next_target_reached = (next_pred_safety_value < target_value_thr) & (torch.abs(next_pred_safety_value - final_safety_values) < target_fidelity_thr)
+            continuous_target_reach = torch.where(target_reached & next_target_reached, continuous_target_reach + 1, 0)
+            target_reached_mask |= continuous_target_reach >= 10
+            ra_success |= target_reached_mask & ~fail
                 
             timestep += 1
 
@@ -263,6 +288,13 @@ def main():
             # Reset the cumulative rewards and timesteps
             cumulative_rewards[finished_episodes] = 0
             cumulative_timesteps[finished_episodes] = 0
+            # Storage the target reach
+            num_ra_success += ra_success[finished_episodes].squeeze(-1).nonzero(as_tuple=False).squeeze(-1).numel()
+            # Reset the target reach rate
+            ra_success[finished_episodes] = False
+            # Reset target set checker
+            continuous_target_reach[finished_episodes] = 0
+            target_reached_mask[finished_episodes] = False
 
             num_terminated += (terminated.squeeze(-1).nonzero(as_tuple=False).squeeze(-1)).numel()
             num_finished += finished_episodes.numel()
@@ -327,7 +359,7 @@ def main():
             # Add Safety value for plotting
             infos["viz_data"]["real_risk_value"] = safety_values
             infos["viz_data"]["pred_risk_value"] = current_pred_safety_value
-            infos["viz_data"]["reach_avoid_value"] = current_pred_reach_avoid_value
+            infos["viz_data"]["reach_avoid_value"] = current_pred_reach_avoid_value if not multi_agent else torch.zeros_like(safety_values)
             infos["viz_data"]["prediction_error"] = torch.abs(current_pred_safety_value - safety_values)
             done_env0 = terminated[0] | truncated[0]
             plot.append(viz_data=infos["viz_data"], episode_end=done_env0)
@@ -343,6 +375,9 @@ def main():
         safety_states = next_safety_states
         safety_values = next_safety_values
         infos = next_infos
+
+        # update (ra related)
+        target_reached = next_target_reached
     
         # update anchor value
         if finished_episodes.numel():
@@ -356,7 +391,8 @@ def main():
     print(f"|{'_' * content_width}|")
     print(f"|{' ' * content_width}|")
     
-    print(f"| {'Success Rate':<50}: {100*(1- num_terminated / num_finished):<36.3f} |")
+    print(f"| {'Episode Success Rate':<50}: {100*(1- num_terminated / num_finished):<36.3f} |")
+    print(f"| {'Reach-Avoid Success Rate':<50}: {100*(num_ra_success / num_finished):<36.3f} |")
 
     print(f"|{'_' * content_width}|")
 

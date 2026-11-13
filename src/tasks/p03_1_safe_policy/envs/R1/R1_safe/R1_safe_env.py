@@ -121,17 +121,20 @@ class R1SafeEnv(R1BaseEnv):
             self._robot.data.projected_gravity_b,
             self._robot.data.joint_pos[:, total_joint_ids],
             self._robot.data.joint_vel[:, total_joint_ids],
-            self.prev_actions[:, self.total_leg_joint_ids],
-            self.prev_actions[:, self.total_arm_joint_ids],
         ], dim=-1)
 
         if self.cfg.num_agents > 1:
+            prev_actions = torch.cat([self.prev_actions["arm"],
+                                      self.prev_actions["leg"]], dim=-1)
+            shared_states = torch.cat((shared_states, prev_actions), dim=-1)
             states = {
                 "arm": shared_states,
                 "leg": shared_states,
             }
         else:
-            states = shared_states
+            prev_actions = torch.cat([self.prev_actions[:, self.total_leg_joint_ids],
+                                      self.prev_actions[:, self.total_arm_joint_ids]], dim=-1)
+            states = torch.cat((shared_states, prev_actions), dim=-1)
 
         return states
 

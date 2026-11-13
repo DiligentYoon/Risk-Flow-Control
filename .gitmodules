@@ -1,4 +1,4 @@
 [submodule "AISL-RL"]
 	path = AISL-RL
 	url = https://github.com/DiligentYoon/AISL-RL.git
-	branch = 82-new-goat
+	branch = 84-goat-keep

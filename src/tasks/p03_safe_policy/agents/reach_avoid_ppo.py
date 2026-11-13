@@ -172,6 +172,12 @@ class ReachAvoidPPO(Agent):
         cumulative_value_loss = 0
         cumulative_ra_loss = 0
 
+        # Grad initialization
+        cumulative_grad_cosine = 0
+        cumulative_grad_conflict = 0
+        minimum_grad_cosine = 0
+        maximum_grad_cosine = 0
+
         # Parameter Update
         kl_divergences = []
         self.set_running_mode("train")
@@ -242,6 +248,34 @@ class ReachAvoidPPO(Agent):
                 predicted_values, _, _ = self.value_critic(sampled_states, update_rms=not epoch)
                 value_loss = F.mse_loss(sampled_value_returns, predicted_values)
 
+                # Update cumulative losses
+                cumulative_reward_policy_loss += reward_policy_loss.item()
+                cumulative_ra_policy_loss += ra_policy_loss.item()
+                cumulative_value_loss += value_loss.item()
+                cumulative_ra_loss += ra_loss.item()
+                if self.entropy_loss_scale:
+                    cumulative_entropy_loss += entropy_loss.item()
+
+                # Update cumulative gradient conflict
+                actor_params = [p for p in self.actor.parameters() if p.requires_grad]
+                grad_reward = torch.autograd.grad(reward_policy_loss, actor_params, retain_graph=True, allow_unused=True)
+                grad_ra = torch.autograd.grad(ra_policy_loss, actor_params, retain_graph=True, allow_unused=True)
+
+                dot = torch.zeros((), device=self.actor.device)
+                norm_r = torch.zeros((), device=self.actor.device)
+                norm_ra = torch.zeros((), device=self.actor.device)
+                for gr, gra in zip(grad_reward, grad_ra):
+                    norm_r += gr.detach().square().sum()
+                    norm_ra += gra.detach().square().sum()
+                    dot += (gr.detach() * gra.detach()).sum()
+                grad_cosine = dot / (torch.sqrt(norm_r) * torch.sqrt(norm_ra) + 1e-12)
+                grad_conflict = (dot < 0).float()
+
+                cumulative_grad_cosine += grad_cosine.item()
+                cumulative_grad_conflict += grad_conflict.item()
+                minimum_grad_cosine = torch.minimum(minimum_grad_cosine, grad_cosine)
+                maximum_grad_cosine = torch.maximum(maximum_grad_cosine, grad_cosine)
+
                 # Optimization step
                 self.optimizer.zero_grad()
                 (policy_loss + entropy_loss + value_loss + ra_loss).backward()
@@ -252,14 +286,6 @@ class ReachAvoidPPO(Agent):
                                                              self.ra_critic.parameters()), self.grad_norm_clip)
                 
                 self.optimizer.step()
-
-                # Update cumulative losses
-                cumulative_reward_policy_loss += reward_policy_loss.item()
-                cumulative_ra_policy_loss += ra_policy_loss.item()
-                cumulative_value_loss += value_loss.item()
-                cumulative_ra_loss += ra_loss.item()
-                if self.entropy_loss_scale:
-                    cumulative_entropy_loss += entropy_loss.item()
 
         # Learning rate scheduler update
         kl = torch.tensor(kl_divergences, device=self.device).mean().item()
@@ -277,5 +303,22 @@ class ReachAvoidPPO(Agent):
         mean_ra_loss = cumulative_ra_loss / (self.learning_epochs * self.mini_batches)
         mean_entropy_loss = cumulative_entropy_loss / (self.learning_epochs * self.mini_batches)
         mean_kl_divergence = kl
+
+        mean_grad_cosine = cumulative_grad_cosine / (self.learning_epochs * self.mini_batches)
+        grad_conflict_rate = cumulative_grad_conflict / (self.learning_epochs * self.mini_batches * self.num_agents)
         
-        return mean_reward_policy_loss, mean_ra_policy_loss, mean_value_loss, mean_ra_loss, mean_entropy_loss, mean_kl_divergence, learning_rate
+        return {
+            "reward_policy_loss": mean_reward_policy_loss, 
+            "ra_policy_loss": mean_ra_policy_loss, 
+            "value_loss": mean_value_loss, 
+            "ra_loss": mean_ra_loss, 
+            "entropy_loss": mean_entropy_loss,
+
+            "grad_cosine": mean_grad_cosine,
+            "max_grad_cosine": maximum_grad_cosine,
+            "min_grad_cosine": minimum_grad_cosine,
+            "grad_conflict_rate": grad_conflict_rate,
+
+            "approx_kl": mean_kl_divergence,
+            "learning_rate": learning_rate,
+        }

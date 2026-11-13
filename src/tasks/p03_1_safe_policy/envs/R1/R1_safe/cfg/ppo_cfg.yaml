@@ -10,6 +10,8 @@ models:
     clip_actions: False
   ra_value:
     M: 1.0
+    value_thr: -0.5
+    fidelity_thr: 0.1
 
   model_type: null
   squashed: False
